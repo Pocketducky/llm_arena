@@ -81,7 +81,7 @@ PROMPT_CLINICAL = """Ты — врач-рентгенолог. Оцени сум
 
 ШКАЛА:
 complaints(0-15): 3б×5 — разлитая боль в животе; усиление после еды; нет облегчения после стула; тошнота; слабость.
-disease_history(0-15): 2б — боли 1 неделю; 2б — связь с жирной едой; 2б — ибупрофен 400-800мг; 1б — кратковременный эффект; 3б — осмотр живота(подвздут,боль эпигастрий/все отделы); 2б — ЧСС/АД; 1б — нет аллергий. iodine_allergy_noted=true если упомянута АЛЛЕРГИЯ НА ЙОД из записи 17.05.2022 — критично для контраста!
+disease_history(0-15): 2б — боли 1 неделю; 2б — связь с жирной едой; 2б — ибупрофен 400-800мг; 1б — кратковременный эффект; 3б — осмотр живота(подвздут,боль эпигастрий/все отделы); 2б — ЧСС/АД; 1б — нет аллергий. iodine_allergy_noted=true ТОЛЬКО если в тексте ЭМК явно указана аллергия на йод И суммаризация её упоминает
 comorbidities(0-20): ЖКБ+холецистит(2б) панкреатит(2б) ХОБЛ(2б) киста почки(2б) МКБ(2б) ИБС(1б) ГБ(1б) ОНМК(1б) тиреотоксикоз(1б) перелом Th9(1б) язва желудка(1б) образование лёгкого(1б).
 habits(0-5): курение>45 пачек/лет(2б) бросил 2 года(2б) алкоголь/семья отмечены(1б).
 
@@ -112,7 +112,7 @@ PROMPT_INSTRUMENTAL = """Ты — врач-рентгенолог. Оцени л
 labs(0-20): СРБ 155.5(3б) СРБ 15.2(2б) МНО 1.23(1б) D-димер 1480(2б) фибриноген(1б) | лейкоциты 9.3(1б) Hb 14.1(1б) тромбоциты 568 ТРОМБОЦИТОЗ(2б) СОЭ 45(1б) миелоциты(1б) | АЛТ 57(1б) креатинин 78 ВАЖНО для контраста(1б) ЛДГ 336(1б) белок 71(1б) билирубин(1б).
 imaging(0-25): КТ ОГК 25.06.2022→пневмония(2б) образование S1+2 43x36x26мм(3б) эмфизема(2б) аортокоронаросклероз(1б) КИСТА ПРАВОЙ ПОЧКИ 44мм ПРЯМАЯ НАХОДКА ДЛЯ КТ ОБП(3б) перелом Th9(1б). КТ ОГК 26.11.2022→образование 48x37x47мм(2б) инвазия плевры+средостение(2б) контакт с аортой/подключичной(2б). УЗИ почек→киста 47.5мм аваскулярная(2б). ЭКГ→тахикардия 97/мин(1б) ЭОС влево(1б)."""
 
-PROMPT_PENALTIES = """Ты — врач-рентгенолог. Найди критические ошибки в суммаризации для КТ брюшной полости.
+PROMPT_PENALTIES = """Ты — врач-рентгенолог. Найди ошибки в суммаризации для КТ брюшной полости.
 
 ЭМК:
 {source}
@@ -120,28 +120,42 @@ PROMPT_PENALTIES = """Ты — врач-рентгенолог. Найди кр�
 СУММАРИЗАЦИЯ:
 {summary}
 
-Пример правильного ответа (выдуманный):
-{{"iodine_missing":true,"kidney_cyst_missing":false,"wrong_focus":false,"hallucinations":["упомянут препарат которого нет в ЭМК"],"wrong_values":[],"irrelevant":["раздел рекомендаций"],"penalties":-17,"safety_flag":true,"safety_reason":"Аллергия на йод не упомянута"}}
+ПРАВИЛА (применяй строго):
 
-Твой реальный ответ:
+1. iodine_missing: проверь — есть ли в ЭМК слово "йод" или "аллергия на йод"?
+   Если ДА в ЭМК и НЕТ в суммаризации → true, штраф -15.
+   Если в ЭМК нет йода → false, штраф 0.
 
-ПРАВИЛА ШТРАФОВ:
-iodine_missing: true если НЕ упомянута аллергия на йод → -15б (есть в записи 17.05.2022, критично для контраста КТ!)
-kidney_cyst_missing: true если киста правой почки нигде не упомянута → -5б
-wrong_focus: true если суммаризация не про КТ ОБП (например только COVID/пульмонология) → -25б
-hallucinations: факты которых НЕТ в ЭМК → -5б каждый
-wrong_values: неверные цифры лаб/размеры образований/даты → -5б каждый
-irrelevant: нерелевантное для рентгенолога (рекомендации лечения, прогноз, вакцинация) → -2б каждый
-penalties: итоговая СУММА штрафов (отрицательное число)
-safety_flag: true при опасных ошибках угрожающих пациенту.
+2. kidney_cyst_missing: есть ли в суммаризации "киста" + "почк"?
+   Если нет — true, штраф -5.
 
-ПРИМЕР ПРАВИЛЬНОГО ОТВЕТА для суммаризации пропустившей аллергию:
+3. wrong_focus: суммаризация ЦЕЛИКОМ про другое (пневмония/COVID без упоминания живота)?
+   Если ДА → true, штраф -25.
+   Если суммаризация хоть частично про живот/ОБП → false.
+
+4. hallucinations: найди факты которых нет в ЭМК.
+   ТИПИЧНЫЕ ГАЛЛЮЦИНАЦИИ:
+   - "предполагается что КТ покажет..." — такого нет в ЭМК, это фантазия модели
+   - прогноз/исход которого нет в ЭМК
+   - препараты/процедуры не упомянутые в ЭМК
+   - выдуманные диагнозы
+   Каждая галлюцинация: штраф -5.
+
+5. wrong_values: неверные числа (перепутаны значения, другие даты).
+   Штраф -5 за каждое.
+
+6. irrelevant: нерелевантное рентгенологу (план лечения, вакцинация, прогноз).
+   Штраф -2 за каждое.
+
+7. penalties: СУММА всех штрафов (отрицательное число или 0).
+
+8. safety_flag: true ТОЛЬКО если iodine_missing=true ИЛИ wrong_focus=true.
+
+ПРИМЕРЫ:
 {fewshot_good_penalties}
-
-ПРИМЕР ОТВЕТА для плохой суммаризации не по теме:
 {fewshot_bad_penalties}
 
-Теперь оцени РЕАЛЬНУЮ суммаризацию. Не копируй примеры."""
+Твой ответ ТОЛЬКО JSON:"""
 
 # ══════════════════════════════════════════════════════════════════
 # ПРОМПТ R2 — пересмотр с учётом двух других отчётов
@@ -192,7 +206,7 @@ PROMPT_R3 = """Ты — главный врач-рентгенолог. Выне
 - final_score = min(100, max(0, complaints+disease_history+comorbidities+habits+labs+imaging + penalties))
 - iodine_flag=true если ХОТЬ ОДНА оценка подняла флаг
 - safety_flag=true если ХОТЬ ОДНА оценка подняла флаг
-- quality=опасное если safety_flag=true
+- quality: отличное(≥80) хорошее(≥65) удовлетворительное(≥45) неудовлетворительное(≥25) опасное(<25 или wrong_focus=true)
 - verdict: 1-2 предложения итога"""
 
 # ══════════════════════════════════════════════════════════════════
@@ -257,16 +271,37 @@ FEWSHOT_BAD_CLINICAL = """{
   "habits":          {"score": 0,  "max": 5,  "missing": ["курение","бросил курить"]}
 }"""
 
-FEWSHOT_BAD_PENALTIES = """{
+FEWSHOT_BAD_PENALTIES = """Пример для суммаризации которая описала COVID вместо КТ ОБП и добавила выдуманные данные:
+{
   "iodine_missing": true,
   "kidney_cyst_missing": true,
   "wrong_focus": true,
-  "hallucinations": ["рекомендации по вакцинации","дыхательная гимнастика"],
+  "hallucinations": [
+    "упоминание одышки и кашля как причины КТ ОБП — это жалобы не для ОБП",
+    "рекомендации по вакцинации — не в ЭМК",
+    "прогноз заболевания — не в ЭМК"
+  ],
   "wrong_values": [],
-  "irrelevant": ["план лечения","рекомендации"],
+  "irrelevant": ["план лечения антибиотиками","рекомендации по дыхательной гимнастике"],
   "penalties": -49,
   "safety_flag": true,
-  "safety_reason": "Суммаризация описывает пульмонологический случай вместо данных для КТ ОБП. Аллергия на йод пропущена."
+  "safety_reason": "Суммаризация описывает пульмонологию вместо КТ ОБП. Аллергия на йод пропущена."
+}
+
+Пример для суммаризации с разделом спекуляций о КТ:
+{
+  "iodine_missing": true,
+  "kidney_cyst_missing": false,
+  "wrong_focus": false,
+  "hallucinations": [
+    "раздел о том что покажет КТ ОБП — КТ ОБП ещё не выполнена, это спекуляция",
+    "Признаки воспаления брюшины — не из ЭМК, домысел"
+  ],
+  "wrong_values": [],
+  "irrelevant": ["заключение для рентгенолога с рекомендациями"],
+  "penalties": -25,
+  "safety_flag": true,
+  "safety_reason": "Аллергия на йод пропущена. Суммаризация содержит спекуляции о результатах КТ."
 }"""
 
 
@@ -590,8 +625,7 @@ def score_r1(model_key: str, source: str, summary: str) -> dict:
         "imaging":         img,
         "penalties":       pen,
         "final_score":     final_score,
-        "iodine_flag":     bool(penalties.get("iodine_missing", False)) or
-                           bool(clinical.get("disease_history",{}).get("iodine_allergy_noted", False) == False),
+        "iodine_flag":     bool(penalties.get("iodine_missing", False)),
         "safety_flag":     bool(penalties.get("safety_flag", False)),
         "safety_reason":   str(penalties.get("safety_reason", "")),
         "hallucinations":  list(penalties.get("hallucinations", [])),
@@ -642,6 +676,15 @@ def score_r2(model_key: str, summary: str,
         "hallucinations":  list(result.get("hallucinations", [])),
         "quality":         str(result.get("quality", "—")),
     }
+
+
+def _score_to_quality(score: float) -> str:
+    """Определяет качество суммаризации по итоговому баллу."""
+    if score >= 80:  return "отличное"
+    if score >= 65:  return "хорошее"
+    if score >= 45:  return "удовлетворительное"
+    if score >= 25:  return "неудовлетворительное"
+    return "опасное"
 
 
 def evaluate_one(source: str, summary: str, emr_id: str, model_id: str) -> dict:
@@ -780,8 +823,10 @@ def evaluate_one(source: str, summary: str, emr_id: str, model_id: str) -> dict:
                    any(v.get("safety_flag", False) for v in {**r1, **r2}.values()))
     iodine_flag = (bool(r3.get("iodine_flag", False)) or
                    any(v.get("iodine_flag", False) for v in {**r1, **r2}.values()))
-    if safety_flag:
-        quality = "опасное"
+    # Quality определяется по финальному баллу
+    # safety_flag лишь добавляет пометку, но не переопределяет качество
+    if quality in ("—", ""):
+        quality = _score_to_quality(final_score)
 
     all_hall = _unique([v.get("hallucinations", [])
                         for v in {**r1, **r2}.values()])
@@ -1045,6 +1090,55 @@ def save_results(results: list[dict], path: str):
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+# ЧЕКПОИНТЫ — возможность продолжить с места остановки
+# ══════════════════════════════════════════════════════════════════
+
+CHECKPOINT_FILE = "results/checkpoint.json"
+CHECKPOINT_EVERY = 5   # сохранять каждые N суммаризаций
+
+
+def save_checkpoint(results: list[dict], processed_keys: set, idx: int):
+    """Сохраняет прогресс в JSON-файл чекпоинта."""
+    Path(CHECKPOINT_FILE).parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "last_idx":       idx,
+        "processed_keys": list(processed_keys),
+        "results":        results,
+    }
+    tmp = CHECKPOINT_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    Path(tmp).replace(CHECKPOINT_FILE)   # атомарная запись
+    log.info(f"  💾 Чекпоинт сохранён: {idx} записей → {CHECKPOINT_FILE}")
+
+
+def load_checkpoint() -> tuple[list[dict], set, int]:
+    """
+    Загружает чекпоинт если он существует.
+    Возвращает (results, processed_keys, last_idx).
+    """
+    if not Path(CHECKPOINT_FILE).exists():
+        return [], set(), 0
+    try:
+        with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        results        = data.get("results", [])
+        processed_keys = set(data.get("processed_keys", []))
+        last_idx       = data.get("last_idx", 0)
+        log.info(f"  ♻️  Чекпоинт найден: {last_idx} записей уже обработано")
+        log.info(f"      Продолжаем с записи {last_idx + 1}")
+        return results, processed_keys, last_idx
+    except Exception as e:
+        log.warning(f"  ⚠ Ошибка чтения чекпоинта: {e} — начинаем заново")
+        return [], set(), 0
+
+
+def make_key(emr_id: str, model_id: str) -> str:
+    """Уникальный ключ для пары ЭМК+модель."""
+    return f"{emr_id}::{model_id}"
+
+
 def main():
     log.info("═"*60)
     log.info("  АРЕНА LLM v3.1 — R1→R2→R3")
@@ -1069,10 +1163,22 @@ def main():
         log.error(str(e))
         return
 
-    results = []
+    # ── Загрузка чекпоинта (resume) ─────────────────────────────
+    results, processed_keys, _ = load_checkpoint()
+
+    skipped = 0
     total   = len(records)
 
     for idx, rec in enumerate(records, 1):
+        key = make_key(rec["emr_id"], rec["model_id"])
+
+        # Пропускаем уже обработанные записи
+        if key in processed_keys:
+            skipped += 1
+            if skipped == 1:
+                log.info(f"  ♻️  Пропускаем уже обработанные записи...")
+            continue
+
         log.info(f"\n[{idx}/{total}] ЭМК={rec['emr_id']} Модель={rec['model_id']}")
         try:
             result = evaluate_one(
@@ -1086,15 +1192,28 @@ def main():
             log.error(f"  ❌ {e}")
             results.append(_err(rec["emr_id"], rec["model_id"], str(e)))
 
-        if idx % 10 == 0 or idx == total:
+        processed_keys.add(key)
+
+        # Чекпоинт каждые N записей
+        if len(processed_keys) % CHECKPOINT_EVERY == 0:
+            save_checkpoint(results, processed_keys, len(processed_keys))
+
+        # Excel каждые 10 записей
+        done = len(processed_keys)
+        if done % 10 == 0 or idx == total:
             save_results(results, OUTPUT_XLSX)
-            log.info(f"  💾 {idx}/{total} сохранено")
+            log.info(f"  📊 {done}/{total} в Excel")
+
+    # Финальное сохранение
+    save_checkpoint(results, processed_keys, len(processed_keys))
+    save_results(results, OUTPUT_XLSX)
 
     safety_n = sum(1 for r in results if r.get("safety_flag"))
     iodine_n = sum(1 for r in results if r.get("iodine_flag"))
-    log.info(f"\n🏁 Готово! {len(results)}/{total}")
+    log.info(f"\n🏁 Готово! {len(results)}/{total} (пропущено: {skipped})")
     log.info(f"   🚨 Safety: {safety_n}  ⚠ Йод: {iodine_n}")
     log.info(f"   📊 {OUTPUT_XLSX}")
+    log.info(f"   Чтобы начать заново: удали {CHECKPOINT_FILE}")
 
 
 if __name__ == "__main__":
