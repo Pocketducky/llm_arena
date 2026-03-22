@@ -4,7 +4,7 @@
 
 Структура входных данных (пример на основе text1_*.txt):
   - text1_source.txt       → исходный текст ЭМК №1
-  - text1_model1.txt ... text1_model6.txt → суммаризации
+  - text1_model1.txt ... test_summary.txt → суммаризации
 """
 
 import os
@@ -19,8 +19,8 @@ import chardet
 # Настройки — измени под свою папку с данными
 # ─────────────────────────────────────────────
 
-DATA_DIR    = Path("raw_data")   # папка с исходными .txt файлами
-OUTPUT_PATH = Path("data/summaries.xlsx")
+DATA_DIR    = Path("data/raw_data")   # папка с исходными .txt файлами
+OUTPUT_PATH = Path("data/result_data/summaries.xlsx")
 
 # Соответствие ID модели из ТЗ → файловому суффиксу
 # ТЗ: ID 2, 11, 23, 89, 38, 19  → файлы model1..model6
@@ -127,4 +127,4 @@ if __name__ == "__main__":
     prepare_from_txt_files()
 
     # Вариант 2: раскомментируй если данные в Excel
-    # prepare_from_excel("data/map.xlsx")
+    # prepare_from_excel("result_data/map.xlsx")
