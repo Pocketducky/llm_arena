@@ -1,5 +1,5 @@
 from app.core.prompts import SUMMARIZE_PROMPT
-from app.services.giga import gigachat_completion
+from app.giga_core.giga_response import ask_gigachat
 
 
 async def summarize_with_gigachat(source_text: str) -> str:
@@ -20,10 +20,13 @@ async def summarize_with_gigachat(source_text: str) -> str:
     ЭМК:
     {source_text}
     :param source_text: ЭМК
-    :return: суммаризация ЭМК
+    :return: "суммаризация ЭМК"
     """
     prompt = SUMMARIZE_PROMPT.format(
         source_text=source_text
     )
 
-    return await gigachat_completion(prompt, temperature=0.05)
+    res = await ask_gigachat(prompt, "Суммаризация")
+    summary = res.get("summary")
+
+    return summary

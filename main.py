@@ -3,7 +3,7 @@
 # Запуск:                              #
 #  ''' uvicorn main:app --reload '''   #
 ########################################
-
+import json
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,8 +12,10 @@ import asyncio
 from typing import Dict
 
 from app.giga_core.giga_evaluate import evaluate_with_gigachat
+from app.giga_core.giga_improve import improve_summarization_gigachat
 from app.giga_core.giga_summarize import summarize_with_gigachat
 from app.core.utils import extract_text_from_file
+import app.services.giga_logs
 
 # Инициализация
 app = FastAPI(title="Оценка суммаризаций ЭМК")
@@ -66,6 +68,17 @@ async def evaluate_text(source: str = Form(...), summary: str = Form(...)):
     except Exception as e:
         raise HTTPException(500, f"Ошибка оценки: {str(e)}")
 
+@app.post("/improve_summarization")
+async def improve_summarization(source: str = Form(...), summary: str = Form(...), r1_results_full: str = Form(...)):
+    """Улучшает суммаризацию на основе трёх R1 оценок."""
+    try:
+        r1_list = json.loads(r1_results_full)
+        if len(r1_list) != 3:
+            raise ValueError("Ожидается ровно три оценки R1")
+        improved = await improve_summarization_gigachat(source, summary, *r1_list)
+        return {"improved_summary": improved}
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка улучшения: {str(e)}")
 
 @app.post("/summarize")
 async def summarize(file: UploadFile = File(...)):

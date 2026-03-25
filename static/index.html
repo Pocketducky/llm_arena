@@ -1,361 +1,613 @@
 <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Оценка суммаризаций ЭМК</title>
-        <style>
-            body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background-color: #f5f7fa;
-                color: #2c3e50;
-                margin: 0;
-                padding: 20px;
-            }
-            .container {
-                max-width: 1200px;
-                margin: 0 auto;
-                background: white;
-                border-radius: 12px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-                overflow: hidden;
-            }
-            .tabs {
-                display: flex;
-                border-bottom: 1px solid #e2e8f0;
-                background-color: #ffffff;
-                padding: 0 20px;
-            }
-            .tab {
-                padding: 14px 24px;
-                cursor: pointer;
-                font-weight: 500;
-                color: #4a5568;
-                border-bottom: 3px solid transparent;
-                transition: all 0.2s;
-            }
-            .tab.active {
-                color: #2c7da0;
-                border-bottom-color: #2c7da0;
-            }
-            .tab-content {
-                display: none;
-                padding: 30px;
-                background: #ffffff;
-            }
-            .tab-content.active {
-                display: block;
-            }
-            h2 {
-                margin-top: 0;
-                color: #2c7da0;
-                font-weight: 500;
-            }
-            button, input[type="submit"] {
-                background-color: #2c7da0;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 14px;
-                transition: background 0.2s;
-            }
-            button:hover {
-                background-color: #1f5e7a;
-            }
-            input[type="file"], textarea {
-                border: 1px solid #cbd5e0;
-                border-radius: 6px;
-                padding: 8px;
-                width: 100%;
-                max-width: 500px;
-                font-family: monospace;
-            }
-            textarea {
-                font-family: inherit;
-                width: 100%;
-                height: 200px;
-            }
-            .result {
-                margin-top: 20px;
-                padding: 15px;
-                background: #f8fafc;
-                border-radius: 8px;
-                border-left: 4px solid #2c7da0;
-                white-space: pre-wrap;
-                font-family: monospace;
-                font-size: 13px;
-            }
-            .error {
-                border-left-color: #e53e3e;
-                background: #fff5f5;
-            }
-            .examples {
-                display: flex;
-                gap: 20px;
-                flex-wrap: wrap;
-            }
-            .example-card {
-                flex: 1;
-                min-width: 250px;
-                background: #f8fafc;
-                border-radius: 8px;
-                padding: 15px;
-                border: 1px solid #e2e8f0;
-            }
-            .example-card h3 {
-                margin-top: 0;
-                color: #2c7da0;
-            }
-            .example-card pre {
-                background: #fff;
-                padding: 10px;
-                border-radius: 6px;
-                overflow-x: auto;
-                font-size: 12px;
-            }
-            .copy-btn {
-                background: #edf2f7;
-                color: #2c7da0;
-                border: 1px solid #cbd5e0;
-                padding: 4px 12px;
-                font-size: 12px;
-                margin-top: 10px;
-            }
-            .copy-btn:hover {
-                background: #e2e8f0;
-            }
-            .team {
-                display: flex;
-                justify-content: space-around;
-                flex-wrap: wrap;
-                gap: 30px;
-                margin-top: 20px;
-            }
-            .team-member {
-                text-align: center;
-                width: 200px;
-            }
-            .team-member img {
-                width: 150px;
-                height: 150px;
-                border-radius: 50%;
-                object-fit: cover;
-                background: #e2e8f0;
-                margin-bottom: 10px;
-            }
-            .team-member h3 {
-                margin: 5px 0;
-            }
-            @media (max-width: 768px) {
-                .tabs { flex-wrap: wrap; }
-                .tab { flex: 1; text-align: center; }
-                .team-member { width: 120px; }
-                .team-member img { width: 100px; height: 100px; }
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="tabs">
-                <div class="tab active" data-tab="tab1">Оценка суммаризации</div>
-                <div class="tab" data-tab="tab2">Примеры ЭМК и суммаризаций</div>
-                <div class="tab" data-tab="tab3">Суммаризация ЭМК</div>
-                <div class="tab" data-tab="tab4">Команда</div>
-            </div>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Оценка суммаризаций ЭМК</title>
+    <style>
+        /* (стили без изменений, как в предыдущем варианте) */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f7fa;
+            color: #2c3e50;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            overflow: hidden;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #e2e8f0;
+            background-color: #ffffff;
+            padding: 0 20px;
+        }
+        .tab {
+            padding: 14px 24px;
+            cursor: pointer;
+            font-weight: 500;
+            color: #4a5568;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab.active {
+            color: #2c7da0;
+            border-bottom-color: #2c7da0;
+        }
+        .tab-content {
+            display: none;
+            padding: 30px;
+            background: #ffffff;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        h2 {
+            margin-top: 0;
+            color: #2c7da0;
+            font-weight: 500;
+        }
+        button, input[type="submit"] {
+            background-color: #2c7da0;
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #1f5e7a;
+        }
+        input[type="file"], textarea {
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            padding: 8px;
+            width: 100%;
+            max-width: 500px;
+            font-family: monospace;
+        }
+        textarea {
+            font-family: inherit;
+            width: 100%;
+            height: 200px;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 4px solid #2c7da0;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .error {
+            border-left-color: #e53e3e;
+            background: #fff5f5;
+        }
+        .examples {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .example-card {
+            flex: 1;
+            min-width: 250px;
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #e2e8f0;
+        }
+        .example-card h3 {
+            margin-top: 0;
+            color: #2c7da0;
+        }
+        .example-card pre {
+            background: #fff;
+            padding: 10px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .copy-btn {
+            background: #edf2f7;
+            color: #2c7da0;
+            border: 1px solid #cbd5e0;
+            padding: 4px 12px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .copy-btn:hover {
+            background: #e2e8f0;
+        }
+        .team {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 30px;
+            margin-top: 20px;
+        }
+        .team-member {
+            text-align: center;
+            width: 200px;
+        }
+        .team-member img {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: #e2e8f0;
+            margin-bottom: 10px;
+        }
+        .team-member h3 {
+            margin: 5px 0;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background-color: #fff;
+            margin: auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 900px;
+            max-height: 80%;
+            overflow-y: auto;
+            position: relative;
+        }
+        .compare-container {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .compare-col {
+            flex: 1;
+            padding: 15px;
+            border-radius: 8px;
+            background: #f8fafc;
+        }
+        .old-summary {
+            border-left: 4px solid #e53e3e;
+            background: #fff5f5;
+        }
+        .new-summary {
+            border-left: 4px solid #2c7da0;
+            background: #f0f9ff;
+        }
+        .compare-col h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .summary-text {
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .compare-close {
+            position: absolute;
+            right: 20px;
+            top: 10px;
+            font-size: 28px;
+            cursor: pointer;
+        }
+        .close {
+            position: absolute;
+            right: 20px;
+            top: 10px;
+            font-size: 28px;
+            cursor: pointer;
+            color: #aaa;
+        }
+        .close:hover {
+            color: #000;
+        }
+        .detail-group {
+            margin-bottom: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+        }
+        .detail-group summary {
+            cursor: pointer;
+            padding: 10px;
+            background: #f8fafc;
+            font-weight: bold;
+        }
+        .detail-group pre {
+            margin: 0;
+            padding: 10px;
+            background: #fff;
+            border-top: 1px solid #e2e8f0;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .btn-details, .btn-improve {
+            margin-top: 10px;
+            margin-right: 10px;
+            background-color: #edf2f7;
+            color: #2c7da0;
+            border: 1px solid #cbd5e0;
+        }
+        @media (max-width: 768px) {
+            .tabs { flex-wrap: wrap; }
+            .tab { flex: 1; text-align: center; }
+            .team-member { width: 120px; }
+            .team-member img { width: 100px; height: 100px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" data-tab="tab1">Оценка суммаризации</div>
+            <div class="tab" data-tab="tab2">Примеры ЭМК и суммаризаций</div>
+            <div class="tab" data-tab="tab3">Суммаризация ЭМК</div>
+            <div class="tab" data-tab="tab4">Команда</div>
+        </div>
 
-            <!-- Вкладка 1: Оценка суммаризации -->
-            <div id="tab1" class="tab-content active">
-                <h2>Оценить суммаризацию</h2>
-                <p>Загрузите файл ЭМК (txt, docx, pdf) — суммаризация будет выполнена автоматически, после чего запустится оценка.</p>
-                <form id="evaluateForm" enctype="multipart/form-data">
-                    <input type="file" name="file" id="evalFile" required>
-                    <button type="submit">Загрузить и оценить</button>
-                </form>
-                <div id="evalResult" class="result" style="display:none;"></div>
-                <hr>
-                <h3>Или введите текст вручную:</h3>
-                <form id="manualEvalForm">
-                    <label>Текст ЭМК:</label><br>
-                    <textarea id="manualSource" rows="6" placeholder="Вставьте текст ЭМК..."></textarea><br>
-                    <label>Суммаризация:</label><br>
-                    <textarea id="manualSummary" rows="4" placeholder="Вставьте суммаризацию..."></textarea><br>
-                    <button type="submit">Оценить</button>
-                </form>
-                <div id="manualResult" class="result" style="display:none;"></div>
-            </div>
+        <!-- Вкладка 1: Оценка суммаризации -->
+        <div id="tab1" class="tab-content active">
+            <h2>Оценить суммаризацию</h2>
+            <p>Загрузите файл ЭМК (txt, docx, pdf) — суммаризация будет выполнена автоматически, после чего запустится оценка.</p>
+            <form id="evaluateForm" enctype="multipart/form-data">
+                <input type="file" name="file" id="evalFile" required>
+                <button type="submit">Загрузить и оценить</button>
+            </form>
+            <div id="evalResult" class="result" style="display:none;"></div>
+            <hr>
+            <h3>Или введите текст вручную:</h3>
+            <form id="manualEvalForm">
+                <label>Текст ЭМК:</label><br>
+                <textarea id="manualSource" rows="6" placeholder="Вставьте текст ЭМК..."></textarea><br>
+                <label>Суммаризация:</label><br>
+                <textarea id="manualSummary" rows="4" placeholder="Вставьте суммаризацию..."></textarea><br>
+                <button type="submit">Оценить</button>
+            </form>
+            <div id="manualResult" class="result" style="display:none;"></div>
+        </div>
 
-            <!-- Вкладка 2: Примеры -->
-            <div id="tab2" class="tab-content">
-                <h2>Примеры ЭМК и суммаризаций</h2>
-                <div class="examples">
-                    <div class="example-card">
-                        <h3>Пример 1 (хорошая суммаризация)</h3>
-                        <p><strong>ЭМК (фрагмент):</strong></p>
-                        <pre id="exampleSource1">Жалобы: боли в животе, разлитые, усиливающиеся после еды, тошнота.
+        <!-- Вкладка 2: Примеры -->
+        <div id="tab2" class="tab-content">
+            <h2>Примеры ЭМК и суммаризаций</h2>
+            <div class="examples">
+                <div class="example-card">
+                    <h3>Пример 1 (хорошая суммаризация)</h3>
+                    <p><strong>ЭМК (фрагмент):</strong></p>
+                    <pre id="exampleSource1">Жалобы: боли в животе, разлитые, усиливающиеся после еды, тошнота.
 Анамнез: неделю назад после жирной пищи. Принимал ибупрофен 400-800 мг с кратковременным эффектом.
 Сопутствующие: ЖКБ, холецистит, ХОБЛ, киста правой почки.
 Лабораторные: СРБ 155.5, лейкоциты 9.3.
 Инструментальные: КТ ОГК 25.06.2022 – пневмония, образование S1+2 43x36x26мм.</pre>
-                        <p><strong>Суммаризация:</strong></p>
-                        <pre id="exampleSum1">Жалобы: боли в животе, усиление после еды, тошнота.
+                    <p><strong>Суммаризация:</strong></p>
+                    <pre id="exampleSum1">Жалобы: боли в животе, усиление после еды, тошнота.
 Анамнез заболевания: боли в течение недели, связь с жирной пищей, ибупрофен.
 Сопутствующие: ЖКБ, холецистит, ХОБЛ, киста правой почки.
 Лаб. данные: СРБ 155.5, лейкоциты 9.3.
 Инструментальные: КТ ОГК 25.06.2022 – пневмония, образование S1+2.</pre>
-                        <button class="copy-btn" data-copy="exampleSource1">Скопировать ЭМК</button>
-                        <button class="copy-btn" data-copy="exampleSum1">Скопировать суммаризацию</button>
-                    </div>
-                    <div class="example-card">
-                        <h3>Пример 2 (плохая суммаризация)</h3>
-                        <p><strong>ЭМК (фрагмент):</strong></p>
-                        <pre id="exampleSource2">Пациент 65 лет, поступил с жалобами на кашель, одышку. Диагноз: COVID-19, двусторонняя пневмония. Лечение: цефепим, фавипиравир.</pre>
-                        <p><strong>Суммаризация (неверная):</strong></p>
-                        <pre id="exampleSum2">Пациент с COVID-19, пневмония. Рекомендована вакцинация. Прогноз благоприятный.</pre>
-                        <button class="copy-btn" data-copy="exampleSource2">Скопировать ЭМК</button>
-                        <button class="copy-btn" data-copy="exampleSum2">Скопировать суммаризацию</button>
-                    </div>
+                    <button class="copy-btn" data-copy="exampleSource1">Скопировать ЭМК</button>
+                    <button class="copy-btn" data-copy="exampleSum1">Скопировать суммаризацию</button>
                 </div>
-            </div>
-
-            <!-- Вкладка 3: Суммаризация -->
-            <div id="tab3" class="tab-content">
-                <h2>Суммаризация ЭМК через GigaChat</h2>
-                <form id="summarizeForm" enctype="multipart/form-data">
-                    <input type="file" name="file" id="sumFile" required>
-                    <button type="submit">Суммаризировать</button>
-                </form>
-                <div id="summarizeResult" class="result" style="display:none;"></div>
-            </div>
-
-            <!-- Вкладка 4: Команда -->
-            <div id="tab4" class="tab-content">
-                <h2>Наша команда</h2>
-                <div class="team">
-                    <div class="team-member">
-                        <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 1">
-                        <h3>Иван Иванов</h3>
-                        <p>Team Lead</p>
-                    </div>
-                    <div class="team-member">
-                        <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 2">
-                        <h3>Петр Петров</h3>
-                        <p>Разработчик</p>
-                    </div>
-                    <div class="team-member">
-                        <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 3">
-                        <h3>Мария Сидорова</h3>
-                        <p>Аналитик</p>
-                    </div>
-                    <div class="team-member">
-                        <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 4">
-                        <h3>Алексей Смирнов</h3>
-                        <p>ML-инженер</p>
-                    </div>
+                <div class="example-card">
+                    <h3>Пример 2 (плохая суммаризация)</h3>
+                    <p><strong>ЭМК (фрагмент):</strong></p>
+                    <pre id="exampleSource2">Пациент 65 лет, поступил с жалобами на кашель, одышку. Диагноз: COVID-19, двусторонняя пневмония. Лечение: цефепим, фавипиравир.</pre>
+                    <p><strong>Суммаризация (неверная):</strong></p>
+                    <pre id="exampleSum2">Пациент с COVID-19, пневмония. Рекомендована вакцинация. Прогноз благоприятный.</pre>
+                    <button class="copy-btn" data-copy="exampleSource2">Скопировать ЭМК</button>
+                    <button class="copy-btn" data-copy="exampleSum2">Скопировать суммаризацию</button>
                 </div>
             </div>
         </div>
 
-        <script>
-            // Переключение вкладок
-            const tabs = document.querySelectorAll('.tab');
-            const contents = document.querySelectorAll('.tab-content');
-            tabs.forEach(tab => {
-                tab.addEventListener('click', () => {
-                    const tabId = tab.getAttribute('data-tab');
-                    tabs.forEach(t => t.classList.remove('active'));
-                    contents.forEach(c => c.classList.remove('active'));
-                    tab.classList.add('active');
-                    document.getElementById(tabId).classList.add('active');
+        <!-- Вкладка 3: Суммаризация -->
+        <div id="tab3" class="tab-content">
+            <h2>Суммаризация ЭМК через GigaChat</h2>
+            <form id="summarizeForm" enctype="multipart/form-data">
+                <input type="file" name="file" id="sumFile" required>
+                <button type="submit">Суммаризировать</button>
+            </form>
+            <div id="summarizeResult" class="result" style="display:none;"></div>
+        </div>
+
+        <!-- Вкладка 4: Команда -->
+        <div id="tab4" class="tab-content">
+            <h2>Наша команда</h2>
+            <div class="team">
+                <div class="team-member">
+                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 1">
+                    <h3>Иван Иванов</h3>
+                    <p>Team Lead</p>
+                </div>
+                <div class="team-member">
+                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 2">
+                    <h3>Петр Петров</h3>
+                    <p>Разработчик</p>
+                </div>
+                <div class="team-member">
+                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 3">
+                    <h3>Мария Сидорова</h3>
+                    <p>Аналитик</p>
+                </div>
+                <div class="team-member">
+                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 4">
+                    <h3>Алексей Смирнов</h3>
+                    <p>ML-инженер</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Модальное окно для сравнения суммаризаций -->
+    <div id="compareModal" class="modal">
+        <div class="modal-content" style="max-width: 1000px;">
+            <span class="close compare-close">&times;</span>
+            <h2>Сравнение суммаризаций</h2>
+            <div class="compare-container">
+                <div class="compare-col old-summary">
+                    <h3>Исходная суммаризация</h3>
+                    <div class="summary-text" id="oldSummaryText"></div>
+                </div>
+                <div class="compare-col new-summary">
+                    <h3>Улучшенная суммаризация</h3>
+                    <div class="summary-text" id="newSummaryText"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Переключение вкладок
+        const tabs = document.querySelectorAll('.tab');
+        const contents = document.querySelectorAll('.tab-content');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabId = tab.getAttribute('data-tab');
+                tabs.forEach(t => t.classList.remove('active'));
+                contents.forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+
+        // Копирование текста из примеров
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetId = btn.getAttribute('data-copy');
+                const text = document.getElementById(targetId).innerText;
+                navigator.clipboard.writeText(text).then(() => {
+                    btn.textContent = 'Скопировано!';
+                    setTimeout(() => btn.textContent = 'Скопировать', 2000);
                 });
             });
+        });
 
-            // Копирование текста из примеров
-            document.querySelectorAll('.copy-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const targetId = btn.getAttribute('data-copy');
-                    const text = document.getElementById(targetId).innerText;
-                    navigator.clipboard.writeText(text).then(() => {
-                        btn.textContent = 'Скопировано!';
-                        setTimeout(() => btn.textContent = 'Скопировать', 2000);
-                    });
-                });
-            });
-
-            // Форма для оценки (загрузка файла)
-            const evalForm = document.getElementById('evaluateForm');
-            evalForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const formData = new FormData(evalForm);
-                const res = await fetch('/upload_for_evaluation', { method: 'POST', body: formData });
-                const data = await res.json();
-                const resultDiv = document.getElementById('evalResult');
-                resultDiv.style.display = 'block';
-                resultDiv.innerHTML = `<strong>Суммаризация получена:</strong><br>${data.summary}<br><br><strong>Task ID:</strong> ${data.task_id}<br>Оценка выполняется, статус можно проверить по ID.`;
-                // Начинаем опрос статуса
-                pollStatus(data.task_id, resultDiv);
-            });
-
-            // Ручная оценка
-            const manualForm = document.getElementById('manualEvalForm');
-            manualForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const source = document.getElementById('manualSource').value;
-                const summary = document.getElementById('manualSummary').value;
-                if (!source.trim() || !summary.trim()) {
-                    alert('Заполните оба поля');
-                    return;
-                }
-                const formData = new URLSearchParams();
-                formData.append('source', source);
-                formData.append('summary', summary);
-                const res = await fetch('/evaluate_text', { method: 'POST', body: formData });
-                const result = await res.json();
-                const resultDiv = document.getElementById('manualResult');
-                resultDiv.style.display = 'block';
-                if (res.ok) {
-                    resultDiv.innerHTML = `<strong>Результат оценки:</strong><br>${JSON.stringify(result, null, 2)}`;
-                } else {
-                    resultDiv.innerHTML = `<strong>Ошибка:</strong> ${result.detail || result}`;
-                    resultDiv.classList.add('error');
-                }
-            });
-
-            // Форма для суммаризации
-            const sumForm = document.getElementById('summarizeForm');
-            sumForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const formData = new FormData(sumForm);
-                const res = await fetch('/summarize', { method: 'POST', body: formData });
-                const data = await res.json();
-                const resultDiv = document.getElementById('summarizeResult');
-                resultDiv.style.display = 'block';
-                if (res.ok) {
-                    resultDiv.innerHTML = `<strong>Суммаризация:</strong><br>${data.summary}`;
-                } else {
-                    resultDiv.innerHTML = `<strong>Ошибка:</strong> ${data.detail || data}`;
-                    resultDiv.classList.add('error');
-                }
-            });
-
-            // Функция опроса статуса
-            async function pollStatus(taskId, resultDiv) {
-                const interval = setInterval(async () => {
-                    const res = await fetch(`/status/${taskId}`);
-                    const data = await res.json();
-                    if (data.status === 'completed') {
-                        clearInterval(interval);
-                        resultDiv.innerHTML += `<br><br><strong>Результат оценки:</strong><br>${JSON.stringify(data.result, null, 2)}`;
-                    } else if (data.status === 'error') {
-                        clearInterval(interval);
-                        resultDiv.innerHTML += `<br><br><strong>Ошибка:</strong> ${data.result?.error || 'Неизвестная ошибка'}`;
-                        resultDiv.classList.add('error');
-                    } else {
-                        resultDiv.innerHTML = resultDiv.innerHTML.replace(/Оценка выполняется.*/, `Оценка выполняется... статус: ${data.status}`);
-                    }
-                }, 3000);
+        // --- Функции для отображения ---
+        function displayResult(container, source, summary, fullResult) {
+            const final = fullResult.final;
+            if (!final) {
+                container.innerHTML = '<strong>Ошибка:</strong> Не удалось получить результат оценки';
+                container.classList.add('error');
+                return;
             }
-        </script>
-    </body>
-    </html>
+
+            const score = final.final_score;
+            const quality = final.quality;
+            const safety = final.safety_flag ? '🚨' : '✅';
+            const iodine = final.iodine_flag ? '⚠' : '✓';
+
+            // Выбираем, какие данные передавать для улучшения
+            const r1ForImprove = fullResult.r1_results_full || fullResult.r1_results;
+
+            let html = `<strong>Исходная суммаризация:</strong><br>${summary}<br><br>`;
+            html += `<strong>Финальный результат:</strong> ${score}/100 (${quality}) ${safety} ${iodine}<br>`;
+            html += `<button class="btn-details" data-full='${JSON.stringify(fullResult).replace(/'/g, "&apos;")}'>Показать детали</button>`;
+            html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(r1ForImprove).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
+            container.innerHTML = html;
+            container.classList.remove('error');
+
+            // обработчики кнопок (остаются без изменений)
+            container.querySelector('.btn-details').addEventListener('click', () => {
+                const full = JSON.parse(container.querySelector('.btn-details').getAttribute('data-full'));
+                fillModal(full);
+                document.getElementById('modal').style.display = 'flex';
+            });
+
+            container.querySelector('.btn-improve').addEventListener('click', async (e) => {
+                const btn = e.target;
+                const source = btn.getAttribute('data-source');
+                const summary = btn.getAttribute('data-summary');
+                const r1Results = JSON.parse(btn.getAttribute('data-r1'));
+                await improveSummary(container, source, summary, r1Results);
+            });
+        }
+
+        // Улучшение суммаризации
+        async function improveSummary(container, source, summary, r1Results) {
+            const formData = new URLSearchParams();
+            formData.append('source', source);
+            formData.append('summary', summary);
+            formData.append('r1_results_full', JSON.stringify(r1Results));
+
+            try {
+                const res = await fetch('/improve_summarization', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (res.ok) {
+                    const modal = document.getElementById('compareModal');
+                    const oldSummaryDiv = document.getElementById('oldSummaryText');
+                    const newSummaryDiv = document.getElementById('newSummaryText');
+                    oldSummaryDiv.innerText = summary;
+                    newSummaryDiv.innerText = data.improved_summary;
+                    modal.style.display = 'flex';
+                } else {
+                    alert(`Ошибка улучшения: ${data.detail || data}`);
+                }
+            } catch (err) {
+                alert(`Ошибка сети: ${err}`);
+            }
+        }
+
+        // Закрытие нового модального окна
+        const compareModal = document.getElementById('compareModal');
+        const compareClose = compareModal.querySelector('.compare-close');
+        compareClose.addEventListener('click', () => compareModal.style.display = 'none');
+        window.addEventListener('click', (e) => {
+            if (e.target === compareModal) compareModal.style.display = 'none';
+        });
+
+
+        // Заполнение модального окна
+        function fillModal(fullResult) {
+            const modalBody = document.getElementById('modal-body');
+            modalBody.innerHTML = '';
+
+            // R1 результаты
+            const r1Div = document.createElement('div');
+            r1Div.innerHTML = '<h3>Результаты первого этапа (R1)</h3>';
+            fullResult.r1_results.forEach((res, idx) => {
+                const details = document.createElement('details');
+                details.className = 'detail-group';
+                const summary = document.createElement('summary');
+                summary.textContent = `Оценка №${idx+1} (балл: ${res.final_score})`;
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.textContent = JSON.stringify(res, null, 2);
+                details.appendChild(pre);
+                r1Div.appendChild(details);
+            });
+            modalBody.appendChild(r1Div);
+
+            // R2 результаты
+            const r2Div = document.createElement('div');
+            r2Div.innerHTML = '<h3>Результаты пересмотра (R2)</h3>';
+            fullResult.r2_results.forEach((res, idx) => {
+                const details = document.createElement('details');
+                details.className = 'detail-group';
+                const summary = document.createElement('summary');
+                summary.textContent = `Оценка №${idx+1} (балл: ${res.final_score})`;
+                details.appendChild(summary);
+                const pre = document.createElement('pre');
+                pre.textContent = JSON.stringify(res, null, 2);
+                details.appendChild(pre);
+                r2Div.appendChild(details);
+            });
+            modalBody.appendChild(r2Div);
+
+            // Финальный результат
+            const finalDiv = document.createElement('div');
+            finalDiv.innerHTML = '<h3>Финальный вердикт (R3)</h3>';
+            const preFinal = document.createElement('pre');
+            preFinal.textContent = JSON.stringify(fullResult.final, null, 2);
+            finalDiv.appendChild(preFinal);
+            modalBody.appendChild(finalDiv);
+        }
+
+        // Закрытие модального окна
+        const modal = document.getElementById('modal');
+        const closeBtn = modal.querySelector('.close');
+        closeBtn.addEventListener('click', () => modal.style.display = 'none');
+        window.addEventListener('click', (e) => {
+            if (e.target === modal) modal.style.display = 'none';
+        });
+
+        // --- Обработка загрузки файла (асинхронная оценка) ---
+        const evalForm = document.getElementById('evaluateForm');
+        evalForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(evalForm);
+            const res = await fetch('/upload_for_evaluation', { method: 'POST', body: formData });
+            const data = await res.json();
+            const resultDiv = document.getElementById('evalResult');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = `<strong>Суммаризация получена:</strong><br>${data.summary}<br><br><strong>Task ID:</strong> ${data.task_id}<br>Оценка выполняется...`;
+            pollStatus(data.task_id, resultDiv, data.summary); // передаём summary
+        });
+
+        // Ручная оценка (синхронная)
+        const manualForm = document.getElementById('manualEvalForm');
+        manualForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const source = document.getElementById('manualSource').value;
+            const summary = document.getElementById('manualSummary').value;
+            if (!source.trim() || !summary.trim()) {
+                alert('Заполните оба поля');
+                return;
+            }
+            const formData = new URLSearchParams();
+            formData.append('source', source);
+            formData.append('summary', summary);
+            const res = await fetch('/evaluate_text', { method: 'POST', body: formData });
+            const result = await res.json();
+            const resultDiv = document.getElementById('manualResult');
+            resultDiv.style.display = 'block';
+            if (res.ok) {
+                displayResult(resultDiv, source, summary, result);
+            } else {
+                resultDiv.innerHTML = `<strong>Ошибка:</strong> ${result.detail || result}`;
+                resultDiv.classList.add('error');
+            }
+        });
+
+        // Суммаризация
+        const sumForm = document.getElementById('summarizeForm');
+        sumForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(sumForm);
+            const res = await fetch('/summarize', { method: 'POST', body: formData });
+            const data = await res.json();
+            const resultDiv = document.getElementById('summarizeResult');
+            resultDiv.style.display = 'block';
+            if (res.ok) {
+                resultDiv.innerHTML = `<strong>Суммаризация:</strong><br>${data.summary}`;
+            } else {
+                resultDiv.innerHTML = `<strong>Ошибка:</strong> ${data.detail || data}`;
+                resultDiv.classList.add('error');
+            }
+        });
+
+        // Опрос статуса для асинхронной оценки
+        async function pollStatus(taskId, resultDiv, originalSummary) {
+            const interval = setInterval(async () => {
+                const res = await fetch(`/status/${taskId}`);
+                const data = await res.json();
+                if (data.status === 'completed') {
+                    clearInterval(interval);
+                    // Используем реальные source и summary из ответа
+                    displayResult(resultDiv, data.source, data.summary, data.result);
+                } else if (data.status === 'error') {
+                    clearInterval(interval);
+                    resultDiv.innerHTML += `<br><br><strong>Ошибка:</strong> ${data.result?.error || 'Неизвестная ошибка'}`;
+                    resultDiv.classList.add('error');
+                } else {
+                    const statusLine = resultDiv.innerHTML.split('<br>')[0];
+                    resultDiv.innerHTML = statusLine + `<br>Оценка выполняется... статус: ${data.status}`;
+                }
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

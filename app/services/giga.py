@@ -1,8 +1,9 @@
 import httpx
+from app.services.giga_logs import logger
 from app.services.giga_token import get_giga_token
 
 
-async def gigachat_completion(prompt: str, temperature: float = 0.1, max_tokens: int = 1024) -> str:
+async def gigachat_completion(prompt: str, temperature: float = 0.1, max_tokens: int = 2048) -> str:
     """
     Функция получения ответа от ГЧ. Подключено обновление и сохранение Access Token в кэш
 
@@ -22,7 +23,8 @@ async def gigachat_completion(prompt: str, temperature: float = 0.1, max_tokens:
     payload = {
         "model": "GigaChat-2",
         "messages": [
-                     {"role": "user", "content": prompt}
+            {"role": "system", "content": "Все твои ответы должны быть строго в формате JSON. Не добавляй никаких комментариев, объяснений или дополнительных символов вне фигурных скобок."},
+            {"role": "user", "content": prompt}
         ],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -32,4 +34,23 @@ async def gigachat_completion(prompt: str, temperature: float = 0.1, max_tokens:
         response = await client.post(url, headers=headers, json=payload,)
         response.raise_for_status()
         data = response.json()
+        logs = {
+            "created_at": data.get("created"),
+            "model": data.get("model"),
+            "tokens": data.get("usage"),
+        }
+        logger.info(
+            "Запрос к GigaChat:\n"
+            "  Модель: %(model)s\n"
+            # "  Промпт: %(prompt)s\n"
+            # "  Ответ: %(response)s\n"
+            "  Токены: %(tokens)s",
+            {
+                "model": logs["model"],
+                # "prompt": prompt,
+                # "response": data["choices"][0]["message"]["content"],
+                "tokens": logs["tokens"]
+            }
+        )
+
         return data["choices"][0]["message"]["content"]
