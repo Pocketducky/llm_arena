@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Оценка суммаризаций ЭМК</title>
     <style>
-        /* (стили без изменений, как в предыдущем варианте) */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f5f7fa;
@@ -65,6 +64,11 @@
         button:hover {
             background-color: #1f5e7a;
         }
+        button:disabled, button.loading {
+            background-color: #a0aec0;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
         input[type="file"], textarea {
             border: 1px solid #cbd5e0;
             border-radius: 6px;
@@ -116,15 +120,16 @@
             overflow-x: auto;
             font-size: 12px;
         }
-        .copy-btn {
+        .copy-btn, .download-btn {
             background: #edf2f7;
             color: #2c7da0;
             border: 1px solid #cbd5e0;
             padding: 4px 12px;
             font-size: 12px;
             margin-top: 10px;
+            margin-right: 5px;
         }
-        .copy-btn:hover {
+        .copy-btn:hover, .download-btn:hover {
             background: #e2e8f0;
         }
         .team {
@@ -245,6 +250,13 @@
             color: #2c7da0;
             border: 1px solid #cbd5e0;
         }
+        .btn-improve.loading {
+            background-color: #a0aec0;
+            cursor: not-allowed;
+        }
+        .action-buttons {
+            margin-top: 10px;
+        }
         @media (max-width: 768px) {
             .tabs { flex-wrap: wrap; }
             .tab { flex: 1; text-align: center; }
@@ -268,7 +280,7 @@
             <p>Загрузите файл ЭМК (txt, docx, pdf) — суммаризация будет выполнена автоматически, после чего запустится оценка.</p>
             <form id="evaluateForm" enctype="multipart/form-data">
                 <input type="file" name="file" id="evalFile" required>
-                <button type="submit">Загрузить и оценить</button>
+                <button type="submit" id="evalSubmitBtn">Загрузить и оценить</button>
             </form>
             <div id="evalResult" class="result" style="display:none;"></div>
             <hr>
@@ -278,7 +290,7 @@
                 <textarea id="manualSource" rows="6" placeholder="Вставьте текст ЭМК..."></textarea><br>
                 <label>Суммаризация:</label><br>
                 <textarea id="manualSummary" rows="4" placeholder="Вставьте суммаризацию..."></textarea><br>
-                <button type="submit">Оценить</button>
+                <button type="submit" id="manualEvalBtn">Оценить</button>
             </form>
             <div id="manualResult" class="result" style="display:none;"></div>
         </div>
@@ -321,7 +333,7 @@
             <h2>Суммаризация ЭМК через GigaChat</h2>
             <form id="summarizeForm" enctype="multipart/form-data">
                 <input type="file" name="file" id="sumFile" required>
-                <button type="submit">Суммаризировать</button>
+                <button type="submit" id="summarizeBtn">Суммаризировать</button>
             </form>
             <div id="summarizeResult" class="result" style="display:none;"></div>
         </div>
@@ -331,14 +343,14 @@
             <h2>Наша команда</h2>
             <div class="team">
                 <div class="team-member">
-                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 1">
-                    <h3>Иван Иванов</h3>
-                    <p>Team Lead</p>
+                    <img src="/static/images/IMG_8998.heic" alt="Участник 1">
+                    <h3>Илья Ройзен</h3>
+                    <p>Разработчик</p>
                 </div>
                 <div class="team-member">
                     <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 2">
                     <h3>Петр Петров</h3>
-                    <p>Разработчик</p>
+                    <p>Лидер</p>
                 </div>
                 <div class="team-member">
                     <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 3">
@@ -375,6 +387,7 @@
                 <div class="compare-col new-summary">
                     <h3>Улучшенная суммаризация</h3>
                     <div class="summary-text" id="newSummaryText"></div>
+                    <div class="action-buttons" id="improvedSummaryButtons" style="margin-top: 10px;"></div>
                 </div>
             </div>
         </div>
@@ -394,17 +407,64 @@
             });
         });
 
-        // Копирование текста из примеров
-        document.querySelectorAll('.copy-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const targetId = btn.getAttribute('data-copy');
-                const text = document.getElementById(targetId).innerText;
-                navigator.clipboard.writeText(text).then(() => {
-                    btn.textContent = 'Скопировано!';
-                    setTimeout(() => btn.textContent = 'Скопировать', 2000);
-                });
+        // Утилиты для работы с кнопками
+        function disableButton(btn, loadingText = '... в процессе') {
+            if (!btn) return;
+            btn.disabled = true;
+            btn.classList.add('loading');
+            btn._originalText = btn.innerText;
+            btn.innerText = loadingText;
+        }
+
+        function enableButton(btn) {
+            if (!btn) return;
+            btn.disabled = false;
+            btn.classList.remove('loading');
+            btn.innerText = btn._originalText || btn.innerText;
+        }
+
+        // Копирование текста
+        function copyToClipboard(text, btnElement) {
+            navigator.clipboard.writeText(text).then(() => {
+                const original = btnElement.innerText;
+                btnElement.innerText = 'Скопировано!';
+                setTimeout(() => btnElement.innerText = original, 2000);
             });
-        });
+        }
+
+        // Скачивание текста в TXT
+        function downloadTxt(text, filename = 'summarization.txt') {
+            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+
+        // Добавление кнопок копирования/скачивания для блока с текстом
+        function addCopyDownloadButtons(container, text, btnContainerSelector = null) {
+            const btnContainer = btnContainerSelector ? document.querySelector(btnContainerSelector) : container;
+            if (!btnContainer) return;
+            // Очищаем предыдущие кнопки, если нужно обновить
+            const existingCopy = btnContainer.querySelector('.copy-summary-btn');
+            const existingDownload = btnContainer.querySelector('.download-summary-btn');
+            if (existingCopy) existingCopy.remove();
+            if (existingDownload) existingDownload.remove();
+
+            const copyBtn = document.createElement('button');
+            copyBtn.textContent = 'Копировать';
+            copyBtn.className = 'copy-summary-btn copy-btn';
+            copyBtn.addEventListener('click', () => copyToClipboard(text, copyBtn));
+
+            const downloadBtn = document.createElement('button');
+            downloadBtn.textContent = 'Скачать TXT';
+            downloadBtn.className = 'download-summary-btn download-btn';
+            downloadBtn.addEventListener('click', () => downloadTxt(text, 'summarization.txt'));
+
+            btnContainer.appendChild(copyBtn);
+            btnContainer.appendChild(downloadBtn);
+        }
 
         // --- Функции для отображения ---
         function displayResult(container, source, summary, fullResult) {
@@ -420,39 +480,45 @@
             const safety = final.safety_flag ? '🚨' : '✅';
             const iodine = final.iodine_flag ? '⚠' : '✓';
 
-            // Выбираем, какие данные передавать для улучшения
-            const r1ForImprove = fullResult.r1_results_full || fullResult.r1_results;
-
-            let html = `<strong>Исходная суммаризация:</strong><br>${summary}<br><br>`;
+            // Рендерим блок с исходной суммаризацией и кнопками копирования/скачивания
+            let html = `<strong>Исходная суммаризация:</strong><br><div id="originalSummaryText">${summary}</div>`;
+            html += `<div class="action-buttons" id="originalSummaryButtons"></div><br>`;
             html += `<strong>Финальный результат:</strong> ${score}/100 (${quality}) ${safety} ${iodine}<br>`;
             html += `<button class="btn-details" data-full='${JSON.stringify(fullResult).replace(/'/g, "&apos;")}'>Показать детали</button>`;
-            html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(r1ForImprove).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
+            html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(fullResult.r1_results_full || fullResult.r1_results).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
             container.innerHTML = html;
             container.classList.remove('error');
 
-            // обработчики кнопок (остаются без изменений)
+            // Добавляем кнопки копирования/скачивания для исходной суммаризации
+            const originalSummaryText = document.getElementById('originalSummaryText').innerText;
+            const originalBtnContainer = document.getElementById('originalSummaryButtons');
+            addCopyDownloadButtons(originalBtnContainer, originalSummaryText, '#originalSummaryButtons');
+
+            // Обработчики кнопок
             container.querySelector('.btn-details').addEventListener('click', () => {
                 const full = JSON.parse(container.querySelector('.btn-details').getAttribute('data-full'));
                 fillModal(full);
                 document.getElementById('modal').style.display = 'flex';
             });
 
-            container.querySelector('.btn-improve').addEventListener('click', async (e) => {
+            const improveBtn = container.querySelector('.btn-improve');
+            improveBtn.addEventListener('click', async (e) => {
                 const btn = e.target;
                 const source = btn.getAttribute('data-source');
                 const summary = btn.getAttribute('data-summary');
                 const r1Results = JSON.parse(btn.getAttribute('data-r1'));
-                await improveSummary(container, source, summary, r1Results);
+                await improveSummary(source, summary, r1Results, btn);
             });
         }
 
-        // Улучшение суммаризации
-        async function improveSummary(container, source, summary, r1Results) {
+        // Улучшение суммаризации (с отключением кнопки)
+        async function improveSummary(source, summary, r1Results, improveBtn) {
             const formData = new URLSearchParams();
             formData.append('source', source);
             formData.append('summary', summary);
             formData.append('r1_results_full', JSON.stringify(r1Results));
 
+            disableButton(improveBtn, 'Улучшение...');
             try {
                 const res = await fetch('/improve_summarization', { method: 'POST', body: formData });
                 const data = await res.json();
@@ -462,16 +528,22 @@
                     const newSummaryDiv = document.getElementById('newSummaryText');
                     oldSummaryDiv.innerText = summary;
                     newSummaryDiv.innerText = data.improved_summary;
+                    // Добавляем кнопки копирования/скачивания для улучшенной суммаризации
+                    const improvedButtonsContainer = document.getElementById('improvedSummaryButtons');
+                    improvedButtonsContainer.innerHTML = ''; // очищаем предыдущие
+                    addCopyDownloadButtons(improvedButtonsContainer, data.improved_summary, '#improvedSummaryButtons');
                     modal.style.display = 'flex';
                 } else {
                     alert(`Ошибка улучшения: ${data.detail || data}`);
                 }
             } catch (err) {
                 alert(`Ошибка сети: ${err}`);
+            } finally {
+                enableButton(improveBtn);
             }
         }
 
-        // Закрытие нового модального окна
+        // Закрытие модального окна сравнения
         const compareModal = document.getElementById('compareModal');
         const compareClose = compareModal.querySelector('.compare-close');
         compareClose.addEventListener('click', () => compareModal.style.display = 'none');
@@ -479,8 +551,7 @@
             if (e.target === compareModal) compareModal.style.display = 'none';
         });
 
-
-        // Заполнение модального окна
+        // Заполнение модального окна деталями
         function fillModal(fullResult) {
             const modalBody = document.getElementById('modal-body');
             modalBody.innerHTML = '';
@@ -526,7 +597,7 @@
             modalBody.appendChild(finalDiv);
         }
 
-        // Закрытие модального окна
+        // Закрытие модального окна деталей
         const modal = document.getElementById('modal');
         const closeBtn = modal.querySelector('.close');
         closeBtn.addEventListener('click', () => modal.style.display = 'none');
@@ -536,19 +607,27 @@
 
         // --- Обработка загрузки файла (асинхронная оценка) ---
         const evalForm = document.getElementById('evaluateForm');
+        const evalSubmitBtn = document.getElementById('evalSubmitBtn');
         evalForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(evalForm);
-            const res = await fetch('/upload_for_evaluation', { method: 'POST', body: formData });
-            const data = await res.json();
-            const resultDiv = document.getElementById('evalResult');
-            resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<strong>Суммаризация получена:</strong><br>${data.summary}<br><br><strong>Task ID:</strong> ${data.task_id}<br>Оценка выполняется...`;
-            pollStatus(data.task_id, resultDiv, data.summary); // передаём summary
+            disableButton(evalSubmitBtn);
+            try {
+                const res = await fetch('/upload_for_evaluation', { method: 'POST', body: formData });
+                const data = await res.json();
+                const resultDiv = document.getElementById('evalResult');
+                resultDiv.style.display = 'block';
+                resultDiv.innerHTML = `<strong>Суммаризация получена:</strong><br>${data.summary}<br><br><strong>Task ID:</strong> ${data.task_id}<br>Оценка выполняется...`;
+                pollStatus(data.task_id, resultDiv, data.summary);
+            } catch (err) {
+                alert(`Ошибка: ${err}`);
+                enableButton(evalSubmitBtn);
+            }
         });
 
         // Ручная оценка (синхронная)
         const manualForm = document.getElementById('manualEvalForm');
+        const manualEvalBtn = document.getElementById('manualEvalBtn');
         manualForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const source = document.getElementById('manualSource').value;
@@ -560,32 +639,51 @@
             const formData = new URLSearchParams();
             formData.append('source', source);
             formData.append('summary', summary);
-            const res = await fetch('/evaluate_text', { method: 'POST', body: formData });
-            const result = await res.json();
-            const resultDiv = document.getElementById('manualResult');
-            resultDiv.style.display = 'block';
-            if (res.ok) {
-                displayResult(resultDiv, source, summary, result);
-            } else {
-                resultDiv.innerHTML = `<strong>Ошибка:</strong> ${result.detail || result}`;
-                resultDiv.classList.add('error');
+            disableButton(manualEvalBtn);
+            try {
+                const res = await fetch('/evaluate_text', { method: 'POST', body: formData });
+                const result = await res.json();
+                const resultDiv = document.getElementById('manualResult');
+                resultDiv.style.display = 'block';
+                if (res.ok) {
+                    displayResult(resultDiv, source, summary, result);
+                } else {
+                    resultDiv.innerHTML = `<strong>Ошибка:</strong> ${result.detail || result}`;
+                    resultDiv.classList.add('error');
+                }
+            } catch (err) {
+                alert(`Ошибка: ${err}`);
+            } finally {
+                enableButton(manualEvalBtn);
             }
         });
 
         // Суммаризация
         const sumForm = document.getElementById('summarizeForm');
+        const summarizeBtn = document.getElementById('summarizeBtn');
         sumForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(sumForm);
-            const res = await fetch('/summarize', { method: 'POST', body: formData });
-            const data = await res.json();
-            const resultDiv = document.getElementById('summarizeResult');
-            resultDiv.style.display = 'block';
-            if (res.ok) {
-                resultDiv.innerHTML = `<strong>Суммаризация:</strong><br>${data.summary}`;
-            } else {
-                resultDiv.innerHTML = `<strong>Ошибка:</strong> ${data.detail || data}`;
-                resultDiv.classList.add('error');
+            disableButton(summarizeBtn);
+            try {
+                const res = await fetch('/summarize', { method: 'POST', body: formData });
+                const data = await res.json();
+                const resultDiv = document.getElementById('summarizeResult');
+                resultDiv.style.display = 'block';
+                if (res.ok) {
+                    // Показываем суммаризацию и добавляем кнопки копирования/скачивания
+                    resultDiv.innerHTML = `<strong>Суммаризация:</strong><br><div id="summarizedText">${data.summary}</div><div class="action-buttons" id="summarizeButtons"></div>`;
+                    const summaryText = document.getElementById('summarizedText').innerText;
+                    const btnContainer = document.getElementById('summarizeButtons');
+                    addCopyDownloadButtons(btnContainer, summaryText, '#summarizeButtons');
+                } else {
+                    resultDiv.innerHTML = `<strong>Ошибка:</strong> ${data.detail || data}`;
+                    resultDiv.classList.add('error');
+                }
+            } catch (err) {
+                alert(`Ошибка: ${err}`);
+            } finally {
+                enableButton(summarizeBtn);
             }
         });
 
@@ -596,12 +694,14 @@
                 const data = await res.json();
                 if (data.status === 'completed') {
                     clearInterval(interval);
-                    // Используем реальные source и summary из ответа
                     displayResult(resultDiv, data.source, data.summary, data.result);
+                    // После отображения результата включаем кнопку загрузки, если нужно
+                    enableButton(evalSubmitBtn);
                 } else if (data.status === 'error') {
                     clearInterval(interval);
                     resultDiv.innerHTML += `<br><br><strong>Ошибка:</strong> ${data.result?.error || 'Неизвестная ошибка'}`;
                     resultDiv.classList.add('error');
+                    enableButton(evalSubmitBtn);
                 } else {
                     const statusLine = resultDiv.innerHTML.split('<br>')[0];
                     resultDiv.innerHTML = statusLine + `<br>Оценка выполняется... статус: ${data.status}`;
