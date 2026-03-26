@@ -68,6 +68,20 @@ async def evaluate_text(source: str = Form(...), summary: str = Form(...)):
     except Exception as e:
         raise HTTPException(500, f"Ошибка оценки: {str(e)}")
 
+
+@app.post("/extract_text")
+async def extract_text(file: UploadFile = File(...)):
+    """
+    Извлекает текст из загруженного файла (txt, docx, pdf) и возвращает его.
+    """
+    content = await file.read()
+    try:
+        text = extract_text_from_file(content, file.filename)
+        return {"text": text}
+    except Exception as e:
+        raise HTTPException(400, f"Ошибка извлечения текста: {str(e)}")
+
+
 @app.post("/improve_summarization")
 async def improve_summarization(source: str = Form(...), summary: str = Form(...), r1_results_full: str = Form(...)):
     """Улучшает суммаризацию на основе трёх R1 оценок."""
@@ -79,6 +93,7 @@ async def improve_summarization(source: str = Form(...), summary: str = Form(...
         return {"improved_summary": improved}
     except Exception as e:
         raise HTTPException(500, f"Ошибка улучшения: {str(e)}")
+
 
 @app.post("/summarize")
 async def summarize(file: UploadFile = File(...)):

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Оценка суммаризаций ЭМК</title>
     <style>
+        /* (стили без изменений, добавлены новые классы) */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f5f7fa;
@@ -120,7 +121,7 @@
             overflow-x: auto;
             font-size: 12px;
         }
-        .copy-btn, .download-btn {
+        .copy-btn, .download-btn, .file-upload-btn {
             background: #edf2f7;
             color: #2c7da0;
             border: 1px solid #cbd5e0;
@@ -129,7 +130,7 @@
             margin-top: 10px;
             margin-right: 5px;
         }
-        .copy-btn:hover, .download-btn:hover {
+        .copy-btn:hover, .download-btn:hover, .file-upload-btn:hover {
             background: #e2e8f0;
         }
         .team {
@@ -243,18 +244,48 @@
             overflow-x: auto;
             font-size: 12px;
         }
-        .btn-details, .btn-improve {
+        .btn-details, .btn-improve, .btn-improved {
             margin-top: 10px;
             margin-right: 10px;
             background-color: #edf2f7;
             color: #2c7da0;
             border: 1px solid #cbd5e0;
         }
-        .btn-improve.loading {
+        .btn-improve.loading, .btn-improved.loading {
             background-color: #a0aec0;
             cursor: not-allowed;
         }
         .action-buttons {
+            margin-top: 10px;
+        }
+        .file-input-group {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .file-name-badge {
+            display: inline-flex;
+            align-items: center;
+            background: #e2e8f0;
+            border-radius: 20px;
+            padding: 4px 10px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        .file-name-badge button {
+            background: none;
+            border: none;
+            color: #2c7da0;
+            font-size: 16px;
+            cursor: pointer;
+            margin-left: 6px;
+            padding: 0 4px;
+        }
+        .file-name-badge button:hover {
+            color: #e53e3e;
+        }
+        .file-preview-area {
             margin-top: 10px;
         }
         @media (max-width: 768px) {
@@ -279,17 +310,42 @@
             <h2>Оценить суммаризацию</h2>
             <p>Загрузите файл ЭМК (txt, docx, pdf) — суммаризация будет выполнена автоматически, после чего запустится оценка.</p>
             <form id="evaluateForm" enctype="multipart/form-data">
-                <input type="file" name="file" id="evalFile" required>
-                <button type="submit" id="evalSubmitBtn">Загрузить и оценить</button>
+                <div class="file-input-group">
+                    <input type="file" name="file" id="evalFile" required style="width: auto;">
+                    <button type="submit" id="evalSubmitBtn">Загрузить и оценить</button>
+                </div>
+                <div id="evalFilePreview" class="file-preview-area" style="display: none;">
+                    <div class="file-name-badge" id="evalFileNameBadge">
+                        <span id="evalFileName"></span>
+                        <button type="button" id="evalClearFileBtn">✖</button>
+                    </div>
+                    <textarea id="evalFileText" rows="6" placeholder="Текст файла будет отображён здесь..." readonly></textarea>
+                </div>
             </form>
             <div id="evalResult" class="result" style="display:none;"></div>
             <hr>
             <h3>Или введите текст вручную:</h3>
             <form id="manualEvalForm">
                 <label>Текст ЭМК:</label><br>
-                <textarea id="manualSource" rows="6" placeholder="Вставьте текст ЭМК..."></textarea><br>
+                <textarea id="manualSource" rows="6" placeholder="Вставьте текст ЭМК..."></textarea>
+                <div class="file-input-group">
+                    <input type="file" id="sourceFileUpload" accept=".txt,.docx,.pdf" style="display:none;">
+                    <button type="button" id="uploadSourceBtn" class="file-upload-btn">Загрузить файл для ЭМК</button>
+                    <span id="sourceFileNameBadge" class="file-name-badge" style="display: none;">
+                        <span id="sourceFileName"></span>
+                        <button type="button" id="sourceClearFileBtn">✖</button>
+                    </span>
+                </div>
                 <label>Суммаризация:</label><br>
-                <textarea id="manualSummary" rows="4" placeholder="Вставьте суммаризацию..."></textarea><br>
+                <textarea id="manualSummary" rows="4" placeholder="Вставьте суммаризацию..."></textarea>
+                <div class="file-input-group">
+                    <input type="file" id="summaryFileUpload" accept=".txt,.docx,.pdf" style="display:none;">
+                    <button type="button" id="uploadSummaryBtn" class="file-upload-btn">Загрузить файл для суммаризации</button>
+                    <span id="summaryFileNameBadge" class="file-name-badge" style="display: none;">
+                        <span id="summaryFileName"></span>
+                        <button type="button" id="summaryClearFileBtn">✖</button>
+                    </span>
+                </div>
                 <button type="submit" id="manualEvalBtn">Оценить</button>
             </form>
             <div id="manualResult" class="result" style="display:none;"></div>
@@ -332,8 +388,17 @@
         <div id="tab3" class="tab-content">
             <h2>Суммаризация ЭМК через GigaChat</h2>
             <form id="summarizeForm" enctype="multipart/form-data">
-                <input type="file" name="file" id="sumFile" required>
-                <button type="submit" id="summarizeBtn">Суммаризировать</button>
+                <div class="file-input-group">
+                    <input type="file" name="file" id="sumFile" required style="width: auto;">
+                    <button type="submit" id="summarizeBtn">Суммаризировать</button>
+                </div>
+                <div id="sumFilePreview" class="file-preview-area" style="display: none;">
+                    <div class="file-name-badge" id="sumFileNameBadge">
+                        <span id="sumFileName"></span>
+                        <button type="button" id="sumClearFileBtn">✖</button>
+                    </div>
+                    <textarea id="sumFileText" rows="6" placeholder="Текст файла будет отображён здесь..." readonly></textarea>
+                </div>
             </form>
             <div id="summarizeResult" class="result" style="display:none;"></div>
         </div>
@@ -446,7 +511,6 @@
         function addCopyDownloadButtons(container, text, btnContainerSelector = null) {
             const btnContainer = btnContainerSelector ? document.querySelector(btnContainerSelector) : container;
             if (!btnContainer) return;
-            // Очищаем предыдущие кнопки, если нужно обновить
             const existingCopy = btnContainer.querySelector('.copy-summary-btn');
             const existingDownload = btnContainer.querySelector('.download-summary-btn');
             if (existingCopy) existingCopy.remove();
@@ -466,7 +530,7 @@
             btnContainer.appendChild(downloadBtn);
         }
 
-        // --- Функции для отображения ---
+        // --- Функции для отображения результата оценки ---
         function displayResult(container, source, summary, fullResult) {
             const final = fullResult.final;
             if (!final) {
@@ -480,21 +544,29 @@
             const safety = final.safety_flag ? '🚨' : '✅';
             const iodine = final.iodine_flag ? '⚠' : '✓';
 
-            // Рендерим блок с исходной суммаризацией и кнопками копирования/скачивания
             let html = `<strong>Исходная суммаризация:</strong><br><div id="originalSummaryText">${summary}</div>`;
             html += `<div class="action-buttons" id="originalSummaryButtons"></div><br>`;
             html += `<strong>Финальный результат:</strong> ${score}/100 (${quality}) ${safety} ${iodine}<br>`;
             html += `<button class="btn-details" data-full='${JSON.stringify(fullResult).replace(/'/g, "&apos;")}'>Показать детали</button>`;
-            html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(fullResult.r1_results_full || fullResult.r1_results).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
+            const improveData = {
+                source: source,
+                summary: summary,
+                r1Results: fullResult.r1_results_full || fullResult.r1_results
+            };
+            const improvedKey = `${source}_${summary}`;
+            const cachedImproved = window.improvedSummaries ? window.improvedSummaries[improvedKey] : null;
+            if (cachedImproved) {
+                html += `<button class="btn-improved" data-improved='${cachedImproved.replace(/'/g, "&apos;")}' data-original-summary='${summary.replace(/'/g, "&apos;")}'>Улучшенная суммаризация</button>`;
+            } else {
+                html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(improveData.r1Results).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
+            }
             container.innerHTML = html;
             container.classList.remove('error');
 
-            // Добавляем кнопки копирования/скачивания для исходной суммаризации
             const originalSummaryText = document.getElementById('originalSummaryText').innerText;
             const originalBtnContainer = document.getElementById('originalSummaryButtons');
             addCopyDownloadButtons(originalBtnContainer, originalSummaryText, '#originalSummaryButtons');
 
-            // Обработчики кнопок
             container.querySelector('.btn-details').addEventListener('click', () => {
                 const full = JSON.parse(container.querySelector('.btn-details').getAttribute('data-full'));
                 fillModal(full);
@@ -502,17 +574,28 @@
             });
 
             const improveBtn = container.querySelector('.btn-improve');
-            improveBtn.addEventListener('click', async (e) => {
-                const btn = e.target;
-                const source = btn.getAttribute('data-source');
-                const summary = btn.getAttribute('data-summary');
-                const r1Results = JSON.parse(btn.getAttribute('data-r1'));
-                await improveSummary(source, summary, r1Results, btn);
-            });
+            const improvedBtn = container.querySelector('.btn-improved');
+            if (improveBtn) {
+                improveBtn.addEventListener('click', async (e) => {
+                    const btn = e.target;
+                    const source = btn.getAttribute('data-source');
+                    const summary = btn.getAttribute('data-summary');
+                    const r1Results = JSON.parse(btn.getAttribute('data-r1'));
+                    await improveSummary(source, summary, r1Results, btn, container);
+                });
+            }
+            if (improvedBtn) {
+                improvedBtn.addEventListener('click', () => {
+                    const improvedText = improvedBtn.getAttribute('data-improved');
+                    const originalSummary = improvedBtn.getAttribute('data-original-summary');
+                    showCompareModal(originalSummary, improvedText);
+                });
+            }
         }
 
-        // Улучшение суммаризации (с отключением кнопки)
-        async function improveSummary(source, summary, r1Results, improveBtn) {
+        window.improvedSummaries = window.improvedSummaries || {};
+
+        async function improveSummary(source, summary, r1Results, improveBtn, resultContainer) {
             const formData = new URLSearchParams();
             formData.append('source', source);
             formData.append('summary', summary);
@@ -523,16 +606,17 @@
                 const res = await fetch('/improve_summarization', { method: 'POST', body: formData });
                 const data = await res.json();
                 if (res.ok) {
-                    const modal = document.getElementById('compareModal');
-                    const oldSummaryDiv = document.getElementById('oldSummaryText');
-                    const newSummaryDiv = document.getElementById('newSummaryText');
-                    oldSummaryDiv.innerText = summary;
-                    newSummaryDiv.innerText = data.improved_summary;
-                    // Добавляем кнопки копирования/скачивания для улучшенной суммаризации
-                    const improvedButtonsContainer = document.getElementById('improvedSummaryButtons');
-                    improvedButtonsContainer.innerHTML = ''; // очищаем предыдущие
-                    addCopyDownloadButtons(improvedButtonsContainer, data.improved_summary, '#improvedSummaryButtons');
-                    modal.style.display = 'flex';
+                    const improvedText = data.improved_summary;
+                    const key = `${source}_${summary}`;
+                    window.improvedSummaries[key] = improvedText;
+                    const newBtn = document.createElement('button');
+                    newBtn.className = 'btn-improved';
+                    newBtn.textContent = 'Улучшенная суммаризация';
+                    newBtn.setAttribute('data-improved', improvedText);
+                    newBtn.setAttribute('data-original-summary', summary);
+                    newBtn.addEventListener('click', () => showCompareModal(summary, improvedText));
+                    improveBtn.replaceWith(newBtn);
+                    showCompareModal(summary, improvedText);
                 } else {
                     alert(`Ошибка улучшения: ${data.detail || data}`);
                 }
@@ -543,7 +627,18 @@
             }
         }
 
-        // Закрытие модального окна сравнения
+        function showCompareModal(originalSummary, improvedText) {
+            const modal = document.getElementById('compareModal');
+            const oldSummaryDiv = document.getElementById('oldSummaryText');
+            const newSummaryDiv = document.getElementById('newSummaryText');
+            oldSummaryDiv.innerText = originalSummary;
+            newSummaryDiv.innerText = improvedText;
+            const improvedButtonsContainer = document.getElementById('improvedSummaryButtons');
+            improvedButtonsContainer.innerHTML = '';
+            addCopyDownloadButtons(improvedButtonsContainer, improvedText, '#improvedSummaryButtons');
+            modal.style.display = 'flex';
+        }
+
         const compareModal = document.getElementById('compareModal');
         const compareClose = compareModal.querySelector('.compare-close');
         compareClose.addEventListener('click', () => compareModal.style.display = 'none');
@@ -551,12 +646,10 @@
             if (e.target === compareModal) compareModal.style.display = 'none';
         });
 
-        // Заполнение модального окна деталями
         function fillModal(fullResult) {
             const modalBody = document.getElementById('modal-body');
             modalBody.innerHTML = '';
 
-            // R1 результаты
             const r1Div = document.createElement('div');
             r1Div.innerHTML = '<h3>Результаты первого этапа (R1)</h3>';
             fullResult.r1_results.forEach((res, idx) => {
@@ -572,7 +665,6 @@
             });
             modalBody.appendChild(r1Div);
 
-            // R2 результаты
             const r2Div = document.createElement('div');
             r2Div.innerHTML = '<h3>Результаты пересмотра (R2)</h3>';
             fullResult.r2_results.forEach((res, idx) => {
@@ -588,7 +680,6 @@
             });
             modalBody.appendChild(r2Div);
 
-            // Финальный результат
             const finalDiv = document.createElement('div');
             finalDiv.innerHTML = '<h3>Финальный вердикт (R3)</h3>';
             const preFinal = document.createElement('pre');
@@ -597,7 +688,6 @@
             modalBody.appendChild(finalDiv);
         }
 
-        // Закрытие модального окна деталей
         const modal = document.getElementById('modal');
         const closeBtn = modal.querySelector('.close');
         closeBtn.addEventListener('click', () => modal.style.display = 'none');
@@ -605,11 +695,157 @@
             if (e.target === modal) modal.style.display = 'none';
         });
 
+        // --- Общая функция для загрузки файла на сервер и отображения текста ---
+        async function uploadFileToServer(file, targetTextarea, fileNameSpan, fileBadge, clearBtn, fileInput) {
+            const formData = new FormData();
+            formData.append('file', file);
+            const res = await fetch('/extract_text', { method: 'POST', body: formData });
+            if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.detail || 'Ошибка извлечения текста');
+            }
+            const data = await res.json();
+            targetTextarea.value = data.text;
+            fileNameSpan.textContent = file.name;
+            fileBadge.style.display = 'inline-flex';
+            // Привязываем очистку
+            clearBtn.onclick = () => {
+                targetTextarea.value = '';
+                fileBadge.style.display = 'none';
+                if (fileInput) fileInput.value = '';
+            };
+        }
+
+        // --- Инициализация компонента загрузки файла с предпросмотром для ручного ввода ---
+        function setupManualFileUpload(uploadBtnId, fileInputId, targetTextareaId, fileNameBadgeId, fileNameSpanId, clearBtnId) {
+            const uploadBtn = document.getElementById(uploadBtnId);
+            const fileInput = document.getElementById(fileInputId);
+            const textarea = document.getElementById(targetTextareaId);
+            const fileBadge = document.getElementById(fileNameBadgeId);
+            const fileNameSpan = document.getElementById(fileNameSpanId);
+            const clearBtn = document.getElementById(clearBtnId);
+
+            uploadBtn.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                uploadBtn.disabled = true;
+                uploadBtn.innerText = 'Загрузка...';
+                try {
+                    await uploadFileToServer(file, textarea, fileNameSpan, fileBadge, clearBtn, fileInput);
+                } catch (err) {
+                    alert(err.message);
+                } finally {
+                    uploadBtn.disabled = false;
+                    uploadBtn.innerText = 'Загрузить файл для ' + (targetTextareaId === 'manualSource' ? 'ЭМК' : 'суммаризации');
+                    fileInput.value = ''; // очищаем, чтобы можно было загрузить тот же файл снова
+                }
+            });
+            // Очистка уже привязана через uploadFileToServer, но для случая, когда очистка вызывается до загрузки
+            clearBtn.onclick = () => {
+                textarea.value = '';
+                fileBadge.style.display = 'none';
+                fileInput.value = '';
+            };
+        }
+
+        // Инициализация для ручной оценки (ЭМК и суммаризация)
+        setupManualFileUpload('uploadSourceBtn', 'sourceFileUpload', 'manualSource', 'sourceFileNameBadge', 'sourceFileName', 'sourceClearFileBtn');
+        setupManualFileUpload('uploadSummaryBtn', 'summaryFileUpload', 'manualSummary', 'summaryFileNameBadge', 'summaryFileName', 'summaryClearFileBtn');
+
+        // --- Для формы "Загрузить и оценить" (eval) ---
+        const evalFileInput = document.getElementById('evalFile');
+        const evalFilePreview = document.getElementById('evalFilePreview');
+        const evalFileNameSpan = document.getElementById('evalFileName');
+        const evalClearBtn = document.getElementById('evalClearFileBtn');
+        const evalFileText = document.getElementById('evalFileText');
+        evalFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                evalFilePreview.style.display = 'none';
+                evalFileText.value = '';
+                return;
+            }
+            evalFilePreview.style.display = 'block';
+            evalFileNameSpan.textContent = file.name;
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const res = await fetch('/extract_text', { method: 'POST', body: formData });
+                if (!res.ok) throw new Error('Ошибка извлечения текста');
+                const data = await res.json();
+                evalFileText.value = data.text;
+            } catch (err) {
+                alert(err.message);
+                evalFilePreview.style.display = 'none';
+                evalFileInput.value = '';
+            }
+        });
+        evalClearBtn.addEventListener('click', () => {
+            evalFileInput.value = '';
+            evalFilePreview.style.display = 'none';
+            evalFileText.value = '';
+        });
+
+        // --- Для вкладки суммаризации (sum) ---
+        const sumFileInput = document.getElementById('sumFile');
+        const sumFilePreview = document.getElementById('sumFilePreview');
+        const sumFileNameSpan = document.getElementById('sumFileName');
+        const sumClearBtn = document.getElementById('sumClearFileBtn');
+        const sumFileText = document.getElementById('sumFileText');
+        sumFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                sumFilePreview.style.display = 'none';
+                sumFileText.value = '';
+                return;
+            }
+            sumFilePreview.style.display = 'block';
+            sumFileNameSpan.textContent = file.name;
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const res = await fetch('/extract_text', { method: 'POST', body: formData });
+                if (!res.ok) throw new Error('Ошибка извлечения текста');
+                const data = await res.json();
+                sumFileText.value = data.text;
+            } catch (err) {
+                alert(err.message);
+                sumFilePreview.style.display = 'none';
+                sumFileInput.value = '';
+            }
+        });
+        sumClearBtn.addEventListener('click', () => {
+            sumFileInput.value = '';
+            sumFilePreview.style.display = 'none';
+            sumFileText.value = '';
+        });
+
+        // --- Проверка ручной формы ---
+        function validateManualForm(source, summary) {
+            if (!source.trim() || !summary.trim()) {
+                alert('Оба поля должны быть заполнены.');
+                return false;
+            }
+            const sourcePrefix = source.slice(0, 200).trim();
+            const summaryPrefix = summary.slice(0, 200).trim();
+            if (sourcePrefix === summaryPrefix) {
+                alert('Текст ЭМК и суммаризация не должны совпадать (проверены первые 200 символов).');
+                return false;
+            }
+            return true;
+        }
+
         // --- Обработка загрузки файла (асинхронная оценка) ---
         const evalForm = document.getElementById('evaluateForm');
         const evalSubmitBtn = document.getElementById('evalSubmitBtn');
         evalForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const file = evalFileInput.files[0];
+            if (!file) {
+                alert('Пожалуйста, выберите файл.');
+                return;
+            }
             const formData = new FormData(evalForm);
             disableButton(evalSubmitBtn);
             try {
@@ -632,10 +868,8 @@
             e.preventDefault();
             const source = document.getElementById('manualSource').value;
             const summary = document.getElementById('manualSummary').value;
-            if (!source.trim() || !summary.trim()) {
-                alert('Заполните оба поля');
-                return;
-            }
+            if (!validateManualForm(source, summary)) return;
+
             const formData = new URLSearchParams();
             formData.append('source', source);
             formData.append('summary', summary);
@@ -663,6 +897,11 @@
         const summarizeBtn = document.getElementById('summarizeBtn');
         sumForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const file = sumFileInput.files[0];
+            if (!file) {
+                alert('Пожалуйста, выберите файл.');
+                return;
+            }
             const formData = new FormData(sumForm);
             disableButton(summarizeBtn);
             try {
@@ -671,7 +910,6 @@
                 const resultDiv = document.getElementById('summarizeResult');
                 resultDiv.style.display = 'block';
                 if (res.ok) {
-                    // Показываем суммаризацию и добавляем кнопки копирования/скачивания
                     resultDiv.innerHTML = `<strong>Суммаризация:</strong><br><div id="summarizedText">${data.summary}</div><div class="action-buttons" id="summarizeButtons"></div>`;
                     const summaryText = document.getElementById('summarizedText').innerText;
                     const btnContainer = document.getElementById('summarizeButtons');
@@ -695,7 +933,6 @@
                 if (data.status === 'completed') {
                     clearInterval(interval);
                     displayResult(resultDiv, data.source, data.summary, data.result);
-                    // После отображения результата включаем кнопку загрузки, если нужно
                     enableButton(evalSubmitBtn);
                 } else if (data.status === 'error') {
                     clearInterval(interval);
