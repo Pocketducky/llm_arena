@@ -17,10 +17,10 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
 
     clinical_prompt = PROMPT_CLINICAL.format(
         source=src_clinical, summary=summary,
-        fewshot_good_summary=FEWSHOT_GOOD_SUMMARY,
-        fewshot_good_clinical=FEWSHOT_GOOD_CLINICAL,
-        fewshot_bad_summary=FEWSHOT_BAD_SUMMARY,
-        fewshot_bad_clinical=FEWSHOT_BAD_CLINICAL,
+        # fewshot_good_summary=FEWSHOT_GOOD_SUMMARY,
+        # fewshot_good_clinical=FEWSHOT_GOOD_CLINICAL,
+        # fewshot_bad_summary=FEWSHOT_BAD_SUMMARY,
+        # fewshot_bad_clinical=FEWSHOT_BAD_CLINICAL,
     )
     clinical = await ask_gigachat(clinical_prompt, "клиника")
 
@@ -31,8 +31,8 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
 
     penalties_prompt = PROMPT_PENALTIES.format(
         source=source, summary=summary,
-        fewshot_good_penalties=FEWSHOT_GOOD_PENALTIES,
-        fewshot_bad_penalties=FEWSHOT_BAD_PENALTIES,
+        # fewshot_good_penalties=FEWSHOT_GOOD_PENALTIES,
+        # fewshot_bad_penalties=FEWSHOT_BAD_PENALTIES,
     )
     penalties = await ask_gigachat(penalties_prompt, "штрафы")
 
