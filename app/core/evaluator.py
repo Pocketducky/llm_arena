@@ -1,5 +1,5 @@
 """
-Арена LLM v3.1 — Оценка суммаризаций медицинских ЭМК
+Арена LLM v4.0 — Coverage-based оценка суммаризаций медицинских ЭМК
 Архитектура: R1 (3 судьи) → R2 (каждый читает двух других) → R3 (финальный арбитр)
 
 Модели — все быстрые, без thinking-режима:
@@ -25,7 +25,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import prompts
-from app.core.utils import extract_json, _warn_if_all_zeros, _make_minimal_prompt, split_source
+from utils import extract_json, _warn_if_all_zeros, _make_minimal_prompt, split_source, log, _score_to_quality
 
 # ══════════════════════════════════════════════════════════════════
 # КОНФИГУРАЦИЯ
@@ -48,20 +48,7 @@ MAX_RETRIES  = 2
 INPUT_XLSX  = "data/result_data/summaries.xlsx"
 OUTPUT_XLSX = "data/results_data/evaluation_results.xlsx"
 
-# Файловый лог — DEBUG (все сырые ответы моделей)
-# Консоль — INFO (только прогресс)
-_file_handler   = logging.FileHandler("evaluation.log", encoding="utf-8")
-_file_handler.setLevel(logging.DEBUG)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-
-_console_handler = logging.StreamHandler()
-_console_handler.setLevel(logging.INFO)
-_console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-log.addHandler(_file_handler)
-log.addHandler(_console_handler)
+# Logging configured in utils.py
 
 # ══════════════════════════════════════════════════════════════════
 # OLLAMA КЛИЕНТ
@@ -155,51 +142,110 @@ def ask(model_key: str, prompt: str, desc: str = "") -> dict:
 # ОЦЕНКА ОДНОЙ СУММАРИЗАЦИИ
 # ══════════════════════════════════════════════════════════════════
 
-def score_r1(model_key: str, source: str, summary: str) -> dict:
-    """R1: три коротких запроса — клиника, инструментальные, штрафы."""
-    src_clinical, src_labs = split_source(source)
+# Кэш фактов ЭМК — извлекается один раз, используется всеми судьями
+_emr_facts_cache: dict[str, dict] = {}
 
-    clinical     = ask(model_key, prompts.PROMPT_CLINICAL.format(
-                       source=src_clinical, summary=summary,
-                       fewshot_good_summary=prompts.FEWSHOT_GOOD_SUMMARY,
-                       fewshot_good_clinical=prompts.FEWSHOT_GOOD_CLINICAL,
-                       fewshot_bad_summary=prompts.FEWSHOT_BAD_SUMMARY,
-                       fewshot_bad_clinical=prompts.FEWSHOT_BAD_CLINICAL,
-                   ), "клиника")
-    instrumental = ask(model_key, prompts.PROMPT_INSTRUMENTAL.format(
-                       source=src_labs, summary=summary), "лаб+инстр")
-    penalties    = ask(model_key, prompts.PROMPT_PENALTIES.format(
-                       source=source, summary=summary,
-                       fewshot_good_penalties=prompts.FEWSHOT_GOOD_PENALTIES,
-                       fewshot_bad_penalties=prompts.FEWSHOT_BAD_PENALTIES,
-                   ), "штрафы")
 
-    comp = float(clinical.get("complaints",      {}).get("score", 0))
-    dh   = float(clinical.get("disease_history", {}).get("score", 0))
-    co   = float(clinical.get("comorbidities",   {}).get("score", 0))
-    hab  = float(clinical.get("habits",          {}).get("score", 0))
-    lab  = float(instrumental.get("labs",        {}).get("score", 0))
-    img  = float(instrumental.get("imaging",     {}).get("score", 0))
-    pen  = float(penalties.get("penalties", 0))
+def extract_emr_facts(emr_id: str, source: str) -> dict:
+    """
+    Извлекает факты из ЭМК один раз и кэширует по emr_id.
+    Ключевой шаг: от качества извлечения зависит вся оценка.
+    """
+    if emr_id in _emr_facts_cache:
+        log.info(f"  [Facts] ЭМК {emr_id}: из кэша")
+        return _emr_facts_cache[emr_id]
 
-    positive    = comp + dh + co + hab + lab + img
+    log.info(f"  [Facts] Извлечение фактов из ЭМК {emr_id}...")
+    for mk in [ARBITER, "LLM_A", "LLM_C"]:
+        try:
+            facts = ask(mk, prompts.PROMPT_EXTRACT_FACTS.format(source=source),
+                        "извлечение фактов")
+            _emr_facts_cache[emr_id] = facts
+            n = sum(len(v) for v in facts.values() if isinstance(v, list))
+            log.info(f"  [Facts] Готово через {mk}: {n} фактов")
+            return facts
+        except Exception as e:
+            log.warning(f"  [Facts] {mk} провал: {e}")
+
+    log.error(f"  [Facts] Все модели провалились для {emr_id}")
+    empty = {
+        "complaints": [], "disease_history": [], "comorbidities": [],
+        "habits": [], "allergies": [], "labs": [], "imaging": [],
+        "iodine_allergy_in_source": False
+    }
+    _emr_facts_cache[emr_id] = empty
+    return empty
+
+
+def _calc_coverage_score(cat_data: dict, max_score: float) -> float:
+    """Считает балл покрытия по covered/missing. Код считает — не модель."""
+    covered = cat_data.get("covered", [])
+    missing = cat_data.get("missing", [])
+    total   = len(covered) + len(missing)
+    if total == 0:
+        return max_score   # нет фактов → нечего проверять → максимум
+    return round(len(covered) / total * max_score, 1)
+
+
+def score_r1(model_key: str, emr_id: str, source: str, summary: str) -> dict:
+    """
+    R1: coverage-based оценка через 2 запроса.
+    Запрос 1: PROMPT_COVERAGE — модель перечисляет covered/missing (не считает score)
+    Запрос 2: PROMPT_ERRORS   — модель ищет ошибки и галлюцинации
+    Баллы считает код по covered/missing, это надёжнее чем просить модель.
+    """
+    emr_facts = extract_emr_facts(emr_id, source)
+    facts_str = json.dumps(emr_facts, ensure_ascii=False, indent=2)
+
+    # Краткий источник для промпта ошибок — не весь ЭМК (иначе 22k символов)
+    src_clinical, _ = split_source(source)
+    source_short = src_clinical[:6000] + (
+        "\n[... текст обрезан ...]" if len(src_clinical) > 6000 else ""
+    )
+
+    # Запрос 1: покрытие
+    coverage = ask(model_key, prompts.PROMPT_COVERAGE.format(
+        emr_facts=facts_str, summary=summary), "покрытие")
+
+    # Запрос 2: ошибки (короткий источник)
+    errors = ask(model_key, prompts.PROMPT_ERRORS.format(
+        source_short=source_short, summary=summary), "ошибки")
+
+    # Считаем баллы в коде
+    MAXES = {"complaints": 15, "disease_history": 15, "comorbidities": 20,
+             "habits": 5, "labs": 20, "imaging": 25}
+    scores = {cat: _calc_coverage_score(coverage.get(cat, {}), mx)
+              for cat, mx in MAXES.items()}
+
+    pen = float(errors.get("penalties", 0))
+
+    # iodine: только если аллергия реально есть в ЭМК
+    iodine_in_source = bool(emr_facts.get("iodine_allergy_in_source", False))
+    iodine_noted = bool(
+        coverage.get("complaints", {}).get("iodine_allergy_noted", False) or
+        coverage.get("disease_history", {}).get("iodine_allergy_noted", False)
+    )
+    iodine_missing = (iodine_in_source and not iodine_noted
+                      and bool(errors.get("iodine_missing", False)))
+
+    positive    = sum(scores.values())
     final_score = max(0.0, min(100.0, round(positive + pen, 1)))
 
+    log.debug(f"      Scores: {scores} pen={pen} total={final_score}")
+
     return {
-        "complaints":      comp,
-        "disease_history": dh,
-        "comorbidities":   co,
-        "habits":          hab,
-        "labs":            lab,
-        "imaging":         img,
-        "penalties":       pen,
-        "final_score":     final_score,
-        "iodine_flag":     bool(penalties.get("iodine_missing", False)),
-        "safety_flag":     bool(penalties.get("safety_flag", False)),
-        "safety_reason":   str(penalties.get("safety_reason", "")),
-        "hallucinations":  list(penalties.get("hallucinations", [])),
-        "wrong_values":    list(penalties.get("wrong_values", [])),
-        "missing_clinical": list(clinical.get("comorbidities", {}).get("missing", [])),
+        **scores,
+        "penalties":      pen,
+        "final_score":    final_score,
+        "iodine_flag":    iodine_missing,
+        "safety_flag":    bool(errors.get("safety_flag", False)),
+        "safety_reason":  str(errors.get("safety_reason", "")),
+        "hallucinations": list(errors.get("hallucinations", [])),
+        "wrong_values":   list(errors.get("wrong_values", [])),
+        "coverage_detail": {cat: {
+            "covered": coverage.get(cat, {}).get("covered", []),
+            "missing":  coverage.get(cat, {}).get("missing", []),
+        } for cat in MAXES},
     }
 
 
@@ -265,7 +311,7 @@ def evaluate_one(source: str, summary: str, emr_id: str, model_id: str) -> dict:
     r1: dict[str, dict] = {}
     for mk in mk_list:
         try:
-            res = score_r1(mk, source, summary)
+            res = score_r1(mk, emr_id, source, summary)
             r1[mk] = res
             log.info(f"    {mk}: {res['final_score']:.1f}/100"
                      + (" ⚠йод" if res["iodine_flag"] else "")
