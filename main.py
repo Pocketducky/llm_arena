@@ -1,7 +1,8 @@
 # main.py
 ########################################
-# Запуск:                              #
-#  ''' uvicorn main:app --reload '''   #
+# Запуск:
+#  Разработка: uvicorn main:app --reload
+#  Прод: uvicorn main:app --host 0.0.0.0 --port 8000
 ########################################
 import json
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form

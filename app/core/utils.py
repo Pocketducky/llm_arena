@@ -169,3 +169,13 @@ def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
         return ''.join(page.extract_text() for page in reader.pages)
     else:
         raise ValueError('Unsupported file format')
+
+
+def _calc_coverage_score(cat_data: dict, max_score: float) -> float:
+    """Считает балл покрытия по covered/missing. Код считает — не модель."""
+    covered = cat_data.get("covered", [])
+    missing = cat_data.get("missing", [])
+    total   = len(covered) + len(missing)
+    if total == 0:
+        return max_score   # нет фактов → нечего проверять → максимум
+    return round(len(covered) / total * max_score, 1)

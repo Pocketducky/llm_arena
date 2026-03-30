@@ -21,11 +21,9 @@ async def evaluate_with_gigachat(source: str, summary: str) -> dict:
     """
     # R1: три независимые оценки
     r1_results = []
-    r1_results_full = [] # Сбор полных данных для улучшения суммаризации
     for _ in range(3):
         r1 = await score_gigachat_r1(source, summary)
-        r1_results.append(r1["summary"])
-        r1_results_full.append(r1["full"])
+        r1_results.append(r1)
 
     # R2: каждая из трёх оценок пересматривается с учётом двух других
     r2_results = []
@@ -36,11 +34,11 @@ async def evaluate_with_gigachat(source: str, summary: str) -> dict:
         r2_results.append(r2)
 
     # R3: финальный арбитраж
-    final = await score_gigachat_r3(r2_results)
+    final: dict = await score_gigachat_r3(r2_results)
+    final["all_hallucinations"] = list({x for d in r1_results + r2_results for x in d.get("hallucinations", [])})
 
     return {
         "final": final,
         "r1_results": r1_results,
-        "r1_results_full": r1_results_full,
         "r2_results": r2_results
     }
