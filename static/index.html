@@ -474,7 +474,15 @@
 Лабораторные исследования: ОАК, биохимия крови (АЛТ, АСТ, креатинин, мочевина, СРБ, Д-димер), коагулограмма.
 Рекомендации:Наблюдение в условиях стационара, продолжение антибактериальной и противовирусной терапии, контроль сатурации и витальных функций.</pre>
                     <p><strong>Суммаризация (неверная):</strong></p>
-                    <pre id="exampleSum2">Пациент с COVID-19, пневмония. Рекомендована вакцинация. Прогноз благоприятный.</pre>
+                    <pre id="exampleSum2">
+Общие сведения:Пациент — мужчина 65 лет, поступил 30.03.2036. Рост и вес соответствуют возрастной норме. Ведёт спокойный образ жизни, интересуется садоводством и кулинарией. В анамнезе — плановое посещение стоматолога.
+Жалобы:Пациент отмечает общую усталость, снижение аппетита, незначительный дискомфорт в области живота. Температуру не измерял, одышки не замечал.
+Анамнез:Заболевание началось с лёгкого недомогания, самостоятельно принимал витамины. Состояние не ухудшалось, однако решил обратиться к врачу для профилактики.
+Эпидемиологический анамнез:Контактов с инфекционными больными не выявлено.
+Объективный статус:Состояние удовлетворительное. Кожные покровы чистые, температура в норме. Дыхание свободное, пульс и давление стабильные.
+Лечение:Назначена поддерживающая терапия, включая витамины и обильное питьё.
+Рекомендации:Продолжить наблюдение, соблюдать режим отдыха и питания.
+                    </pre>
                     <button class="copy-btn" data-copy="exampleSource2">Скопировать ЭМК</button>
                     <button class="copy-btn" data-copy="exampleSum2">Скопировать суммаризацию</button>
                 </div>
@@ -706,13 +714,20 @@
         }
 
         // Функция для создания блока результата с крестиком
-        function createResultContainer(htmlContent) {
+        function createResultContainer(htmlContent, parentContainer) {
             const wrapper = document.createElement('div');
-            wrapper.className = 'result';
+            // Не присваиваем класс result, чтобы избежать двойных стилей
             const closeBtn = document.createElement('button');
             closeBtn.innerHTML = '✖';
             closeBtn.className = 'close-result';
-            closeBtn.onclick = () => wrapper.remove();
+            closeBtn.onclick = () => {
+                // Удаляем родительский контейнер (resultDiv)
+                if (parentContainer) {
+                    parentContainer.innerHTML = '';
+                    parentContainer.style.display = 'none';
+                    parentContainer.classList.remove('error');
+                }
+            };
             wrapper.appendChild(closeBtn);
             const contentDiv = document.createElement('div');
             contentDiv.innerHTML = htmlContent;
@@ -723,10 +738,12 @@
         // Функция отображения результата (общая)
         function displayResultInContainer(container, htmlContent) {
             container.innerHTML = '';
-            const resultWrapper = createResultContainer(htmlContent);
-            container.appendChild(resultWrapper);
+            const contentWrapper = createResultContainer(htmlContent, container);
+            container.appendChild(contentWrapper);
             container.style.display = 'block';
+            container.classList.remove('error');
         }
+
 
         // --- Функции для отображения оценки (сворачиваемые блоки) ---
         function renderEvaluationCard(data, title) {
@@ -850,11 +867,11 @@
             } else {
                 html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(improveData.r1Results).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
             }
-            // Создаём контейнер с крестиком
-            const resultWrapper = createResultContainer(html);
             container.innerHTML = '';
-            container.appendChild(resultWrapper);
+            const contentWrapper = createResultContainer(html, container);
+            container.appendChild(contentWrapper);
             container.classList.remove('error');
+            container.style.display = 'block';
 
             // Добавляем кнопки копирования для исходной суммаризации
             const originalSummaryText = document.getElementById('originalSummaryText').innerText;
@@ -862,7 +879,7 @@
             addCopyDownloadButtons(originalBtnContainer, originalSummaryText, '#originalSummaryButtons');
 
             // Обработчик для кнопки деталей
-            const detailsBtn = resultWrapper.querySelector('.btn-details');
+            const detailsBtn = contentWrapper.querySelector('.btn-details');
             if (detailsBtn) {
                 detailsBtn.addEventListener('click', () => {
                     const full = JSON.parse(detailsBtn.getAttribute('data-full'));
@@ -870,8 +887,8 @@
                     document.getElementById('modal').style.display = 'flex';
                 });
             }
-            const improveBtn = resultWrapper.querySelector('.btn-improve');
-            const improvedBtn = resultWrapper.querySelector('.btn-improved');
+            const improveBtn = contentWrapper.querySelector('.btn-improve');
+            const improvedBtn = contentWrapper.querySelector('.btn-improved');
             if (improveBtn) {
                 improveBtn.addEventListener('click', async (e) => {
                     const btn = e.target;
@@ -1165,9 +1182,7 @@
                 resultDiv.style.display = 'block';
                 if (res.ok) {
                     const html = `<strong>Суммаризация:</strong><br><div id="summarizedText">${data.summary}</div><div class="action-buttons" id="summarizeButtons"></div>`;
-                    const wrapper = createResultContainer(html);
-                    resultDiv.innerHTML = '';
-                    resultDiv.appendChild(wrapper);
+                    displayResultInContainer(resultDiv, html);
                     const summaryText = document.getElementById('summarizedText').innerText;
                     const btnContainer = document.getElementById('summarizeButtons');
                     addCopyDownloadButtons(btnContainer, summaryText, '#summarizeButtons');
@@ -1204,9 +1219,7 @@
                 resultDiv.style.display = 'block';
                 if (res.ok) {
                     const html = `<strong>Суммаризация:</strong><br><div id="summarizedTextManual">${data.summary}</div><div class="action-buttons" id="summarizeButtonsManual"></div>`;
-                    const wrapper = createResultContainer(html);
-                    resultDiv.innerHTML = '';
-                    resultDiv.appendChild(wrapper);
+                    displayResultInContainer(resultDiv, html);
                     const summaryText = document.getElementById('summarizedTextManual').innerText;
                     const btnContainer = document.getElementById('summarizeButtonsManual');
                     addCopyDownloadButtons(btnContainer, summaryText, '#summarizeButtonsManual');
