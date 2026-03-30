@@ -40,7 +40,6 @@ async def score_gigachat_r3(r2_results: list[dict]) -> dict:
     )
     result = await ask_gigachat(prompt_r3, "R3-арбитраж", temperature=0.0)
 
-    final_score = max(0.0, min(100.0, float(result.get("final_score", 0))))
     criteria = {
         "complaints": float(result.get("complaints", 0)),
         "disease_history": float(result.get("disease_history", 0)),
@@ -50,6 +49,18 @@ async def score_gigachat_r3(r2_results: list[dict]) -> dict:
         "imaging": float(result.get("imaging", 0)),
         "penalties": float(result.get("penalties", 0)),
     }
+
+    comp = float(criteria.get("complaints", 0))
+    dh = float(criteria.get("disease_history", 0))
+    co = float(criteria.get("comorbidities", 0))
+    hab = float(criteria.get("habits", 0))
+    lab = float(criteria.get("labs", 0))
+    img = float(criteria.get("imaging", 0))
+    pen = float(criteria.get("penalties", 0))
+
+    positive = comp + dh + co + hab + lab + img
+    final_score = max(0.0, min(100.0, round(positive - pen if pen > 0 else positive + pen, 1)))
+
     quality = str(result.get("quality", "—"))
     verdict_text = str(result.get("verdict", ""))
 
