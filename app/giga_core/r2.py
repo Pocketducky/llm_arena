@@ -38,18 +38,21 @@ async def score_gigachat_r2(my_r1: dict, peer1_r1: dict, peer2_r1: dict, summary
     :param summary: Суммаризация
     :return: Оценка в формате: {"complaints":0,"disease_history":0,"comorbidities":0,"habits":0,"labs":0,"imaging":0,"penalties":0,"iodine_flag":false,"safety_flag":false,"hallucinations":[],"quality":"отличное/хорошее/удовлетворительное/неудовлетворительное/опасное"}
     """
+
     def compact(r: dict) -> str:
         return json.dumps({k: v for k, v in r.items()
-                           if k not in ("safety_reason", "wrong_values", "hallucinations")},
+                           if k not in ("missing_clinical", "safety_reason",
+                                        "wrong_values", "hallucinations")},
                           ensure_ascii=False)
 
-    prompt = PROMPT_R2.format(
+    prompt_r2 = PROMPT_R2.format(
         summary=summary,
         my_report=compact(my_r1),
         peer_1=compact(peer1_r1),
         peer_2=compact(peer2_r1),
     )
-    result = await ask_gigachat(prompt, "R2-пересмотр")
+
+    result = await ask_gigachat(prompt_r2, "R2-пересмотр")
 
     comp = float(result.get("complaints", 0))
     dh = float(result.get("disease_history", 0))

@@ -1,78 +1,84 @@
-from app.core.prompts import PROMPT_CLINICAL, FEWSHOT_GOOD_CLINICAL, FEWSHOT_BAD_SUMMARY, FEWSHOT_BAD_CLINICAL, \
-    FEWSHOT_GOOD_SUMMARY, PROMPT_INSTRUMENTAL, PROMPT_PENALTIES, FEWSHOT_GOOD_PENALTIES, FEWSHOT_BAD_PENALTIES
-from app.core.utils import split_source
+from app.core.prompts import PROMPT_EXTRACT_FACTS, PROMPT_COVERAGE, PROMPT_ERRORS
+from app.core.utils import split_source, _calc_coverage_score
 from app.giga_core.giga_response import ask_gigachat
 
 
 async def score_gigachat_r1(source: str, summary: str) -> dict:
     """
     Оценка суммаризации ЭМК по 2 разделам и 12 критериям, состоящая из 3 запросов
+
+    coverage:
+      "complaints":      {{"covered": [], "missing": [], "iodine_allergy_noted": false}},
+      "disease_history": {{"covered": [], "missing": []}},
+      "comorbidities":   {{"covered": [], "missing": []}},
+      "habits":          {{"covered": [], "missing": []}},
+      "labs":            {{"covered": [], "missing": []}},
+      "imaging":         {{"covered": [], "missing": []}}
+
+    errors:
+      "iodine_missing": false,
+      "wrong_focus": false,
+      "hallucinations": [],
+      "wrong_values": [],
+      "irrelevant": [],
+      "penalties": 0,
+      "safety_flag": false,
+      "safety_reason": ""
+
     :param source: ЭМК
     :param summary: Суммаризация ЭМК
-    :return: Словарь с результатами оценки:
-        { summary : Обобщенныый результат, только самая важная информация по оценкам
-        clinical_part, instrumental_part, penalties : Подробный отчет о результатах каждого блока оценки }
     """
-    src_clinical, src_labs = split_source(source)
 
-    clinical_prompt = PROMPT_CLINICAL.format(
-        source=src_clinical, summary=summary,
-        # fewshot_good_summary=FEWSHOT_GOOD_SUMMARY,
-        # fewshot_good_clinical=FEWSHOT_GOOD_CLINICAL,
-        # fewshot_bad_summary=FEWSHOT_BAD_SUMMARY,
-        # fewshot_bad_clinical=FEWSHOT_BAD_CLINICAL,
+    facts_prompt = PROMPT_EXTRACT_FACTS.format(
+        source = source
     )
-    clinical = await ask_gigachat(clinical_prompt, "клиника")
+    facts = await ask_gigachat(facts_prompt, "Факты ЭМК")
 
-    instrumental_prompt = PROMPT_INSTRUMENTAL.format(
-        source=src_labs, summary=summary
+    coverage_prompt = PROMPT_COVERAGE.format(
+        emr_facts = facts,
+        summary = summary
     )
-    instrumental = await ask_gigachat(instrumental_prompt, "лаб+инстр")
+    coverage = await ask_gigachat(coverage_prompt, "Соответствие ЭМК/суммаризации")
 
-    penalties_prompt = PROMPT_PENALTIES.format(
-        source=source, summary=summary,
-        # fewshot_good_penalties=FEWSHOT_GOOD_PENALTIES,
-        # fewshot_bad_penalties=FEWSHOT_BAD_PENALTIES,
+    errors_prompts = PROMPT_ERRORS.format(
+        source_short = source,
+        summary = summary
     )
-    penalties = await ask_gigachat(penalties_prompt, "штрафы")
+    errors = await ask_gigachat(errors_prompts, "Штрафы", temperature=0.0)
 
-    # Временная обработка
-    try:
-        comp = float(clinical.get("complaints", {}).get("score", 0))
-        dh = float(clinical.get("disease_history", {}).get("score", 0))
-        co = float(clinical.get("comorbidities", {}).get("score", 0))
-        hab = float(clinical.get("habits", {}).get("score", 0))
-        lab = float(instrumental.get("labs", {}).get("score", 0))
-        img = float(instrumental.get("imaging", {}).get("score", 0))
-        pen = float(penalties.get("penalties", 0))
+    # Считаем баллы в коде
+    MAXES = {"complaints": 15, "disease_history": 15, "comorbidities": 20,
+             "habits": 5, "labs": 20, "imaging": 25}
+    scores = {cat: _calc_coverage_score(coverage.get(cat, {}), mx)
+              for cat, mx in MAXES.items()}
 
-        positive = comp + dh + co + hab + lab + img
-        final_score = max(0.0, min(100.0, round(positive + pen, 1)))
+    pen = float(errors.get("penalties", 0))
 
-        return {
-            "summary": {
-                "complaints": comp,
-                "disease_history": dh,
-                "comorbidities": co,
-                "habits": hab,
-                "labs": lab,
-                "imaging": img,
-                "penalties": pen,
-                "final_score": final_score,
-                "iodine_flag": bool(penalties.get("iodine_missing", False)),
-                "safety_flag": bool(penalties.get("safety_flag", False)),
-                "safety_reason": str(penalties.get("safety_reason", "")),
-                "hallucinations": [str(h) for h in penalties.get("hallucinations", [])],
-                "wrong_values": [str(w) for w in penalties.get("wrong_values", [])],
-            },
-            "full": {
-                "clinical_part": clinical,
-                "instrumental_part": instrumental,
-                "penalties": penalties,
-            }
-        }
+    # iodine: только если аллергия реально есть в ЭМК
+    iodine_in_source = bool(facts.get("iodine_allergy_in_source", False))
+    iodine_noted = bool(
+        coverage.get("complaints", {}).get("iodine_allergy_noted", False) or
+        coverage.get("disease_history", {}).get("iodine_allergy_noted", False)
+    )
+    iodine_missing = (iodine_in_source and not iodine_noted
+                      and bool(errors.get("iodine_missing", False)))
 
-    except Exception as e:
-        print(f"❌Ошибка тут: {e}")
+    positive = sum(scores.values())
+    final_score = max(0.0, min(100.0, round(positive + pen, 1)))
+
+    return {
+        **scores,
+        "penalties": pen,
+        "final_score": final_score,
+        "iodine_flag": iodine_missing,
+        "safety_flag": bool(errors.get("safety_flag", False)),
+        "safety_reason": str(errors.get("safety_reason", "")),
+        "hallucinations": list(errors.get("hallucinations", [])),
+        "wrong_values": list(errors.get("wrong_values", [])),
+        "coverage_detail": {cat: {
+            "covered": coverage.get(cat, {}).get("covered", []),
+            "missing": coverage.get(cat, {}).get("missing", []),
+        } for cat in MAXES},
+    }
 
 

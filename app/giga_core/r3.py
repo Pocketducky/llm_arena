@@ -24,29 +24,47 @@ async def score_gigachat_r3(r2_results: list[dict]) -> dict:
             "hallucinations": [h for r in r2_results for h in r.get("hallucinations", [])],
         }
 
-    prompt = PROMPT_R3.format(
+    prompt_r3 = PROMPT_R3.format(
         report_a=json.dumps({k: v for k, v in r2_results[0].items()
-                             if k not in ("hallucinations", "quality")}, ensure_ascii=False),
+                           if k not in ("missing_clinical","safety_reason",
+                                        "wrong_values","error")},
+                          ensure_ascii=False),
         report_b=json.dumps({k: v for k, v in r2_results[1].items()
-                             if k not in ("hallucinations", "quality")}, ensure_ascii=False),
+                           if k not in ("missing_clinical","safety_reason",
+                                        "wrong_values","error")},
+                          ensure_ascii=False),
         report_c=json.dumps({k: v for k, v in r2_results[2].items()
-                             if k not in ("hallucinations", "quality")}, ensure_ascii=False),
+                           if k not in ("missing_clinical","safety_reason",
+                                        "wrong_values","error")},
+                          ensure_ascii=False),
     )
-    result = await ask_gigachat(prompt, "R3-арбитраж")
+    result = await ask_gigachat(prompt_r3, "R3-арбитраж")
 
-    final_score = float(result.get("final_score", 0))
-    quality = str(result.get("quality", _score_to_quality(final_score)))
-    verdict = str(result.get("verdict", ""))
-    safety_flag = bool(result.get("safety_flag", False) or any(r.get("safety_flag") for r in r2_results))
-    iodine_flag = bool(result.get("iodine_flag", False) or any(r.get("iodine_flag") for r in r2_results))
-    hallucinations = list(set(h for r in r2_results for h in r.get("hallucinations", [])))
+    final_score = max(0.0, min(100.0, float(result.get("final_score", 0))))
+    criteria = {
+        "complaints": float(result.get("complaints", 0)),
+        "disease_history": float(result.get("disease_history", 0)),
+        "comorbidities": float(result.get("comorbidities", 0)),
+        "habits": float(result.get("habits", 0)),
+        "labs": float(result.get("labs", 0)),
+        "imaging": float(result.get("imaging", 0)),
+        "penalties": float(result.get("penalties", 0)),
+    }
+    quality = str(result.get("quality", "—"))
+    verdict_text = str(result.get("verdict", ""))
+
+    safety_flag = (bool(result.get("safety_flag", False)))
+    iodine_flag = (bool(result.get("iodine_flag", False)))
+
+    if quality in ("—", ""):
+        quality = _score_to_quality(final_score)
 
     return {
         "final_score": final_score,
         "quality": quality,
-        "verdict": verdict,
         "safety_flag": safety_flag,
         "iodine_flag": iodine_flag,
-        "hallucinations": hallucinations,
+        "verdict": verdict_text,
+        "criteria": criteria,
     }
 

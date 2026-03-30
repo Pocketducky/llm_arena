@@ -489,12 +489,24 @@
         }
 
         // Копирование текста
-        function copyToClipboard(text, btnElement) {
-            navigator.clipboard.writeText(text).then(() => {
-                const original = btnElement.innerText;
+        async function copyToClipboard(text, btnElement) {
+            const original = btnElement.innerText;
+            btnElement.innerText = 'Копирование...';
+            try {
+                await navigator.clipboard.writeText(text);
                 btnElement.innerText = 'Скопировано!';
                 setTimeout(() => btnElement.innerText = original, 2000);
-            });
+            } catch (err) {
+                // Fallback для небезопасных контекстов
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                btnElement.innerText = 'Скопировано!';
+                setTimeout(() => btnElement.innerText = original, 2000);
+            }
         }
 
         // Скачивание текста в TXT
@@ -945,6 +957,22 @@
                 }
             }, 3000);
         }
+
+        // Инициализация кнопок копирования на вкладке примеров
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            // Защита от двойного добавления
+            if (btn.dataset.listener) return;
+            btn.dataset.listener = 'true';
+            btn.addEventListener('click', () => {
+                const targetId = btn.getAttribute('data-copy');
+                const textElement = document.getElementById(targetId);
+                if (textElement) {
+                    copyToClipboard(textElement.innerText, btn);
+                } else {
+                    console.error('Элемент с id', targetId, 'не найден');
+                }
+            });
+        });
     </script>
 </body>
 </html>

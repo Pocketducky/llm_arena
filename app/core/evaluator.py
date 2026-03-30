@@ -24,7 +24,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-import prompts
+# from prompts import *
 from utils import extract_json, _warn_if_all_zeros, _make_minimal_prompt, split_source, log, _score_to_quality
 
 # ══════════════════════════════════════════════════════════════════
@@ -175,16 +175,6 @@ def extract_emr_facts(emr_id: str, source: str) -> dict:
     }
     _emr_facts_cache[emr_id] = empty
     return empty
-
-
-def _calc_coverage_score(cat_data: dict, max_score: float) -> float:
-    """Считает балл покрытия по covered/missing. Код считает — не модель."""
-    covered = cat_data.get("covered", [])
-    missing = cat_data.get("missing", [])
-    total   = len(covered) + len(missing)
-    if total == 0:
-        return max_score   # нет фактов → нечего проверять → максимум
-    return round(len(covered) / total * max_score, 1)
 
 
 def score_r1(model_key: str, emr_id: str, source: str, summary: str) -> dict:

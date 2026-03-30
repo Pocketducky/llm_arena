@@ -3,14 +3,14 @@ from app.services.giga import gigachat_completion
 import json
 from app.services.giga_logs import logger
 
-async def ask_gigachat(prompt: str, desc: str = "") -> dict | str:
+async def ask_gigachat(prompt: str, desc: str = "", temperature: float = 0.1) -> dict | str:
     """
     Полный запрос в гигачат с форматированием ответа
     :param prompt:
     :param desc: Метка запроса (R1, R2, R3)
     :return:
     """
-    raw = await gigachat_completion(prompt)
+    raw = await gigachat_completion(prompt, temperature=temperature)
     try:
         result = extract_json(raw)
         logger.info(
