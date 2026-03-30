@@ -38,7 +38,7 @@ async def score_gigachat_r3(r2_results: list[dict]) -> dict:
                                         "wrong_values","error")},
                           ensure_ascii=False),
     )
-    result = await ask_gigachat(prompt_r3, "R3-арбитраж")
+    result = await ask_gigachat(prompt_r3, "R3-арбитраж", temperature=0.0)
 
     final_score = max(0.0, min(100.0, float(result.get("final_score", 0))))
     criteria = {

@@ -92,6 +92,24 @@
             white-space: pre-wrap;
             font-family: monospace;
             font-size: 13px;
+            position: relative;
+        }
+        .result .close-result {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            cursor: pointer;
+            font-size: 20px;
+            color: #888;
+            background: none;
+            border: none;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            line-height: 1;
+        }
+        .result .close-result:hover {
+            color: #e53e3e;
         }
         .error {
             border-left-color: #e53e3e;
@@ -288,6 +306,66 @@
         .file-preview-area {
             margin-top: 10px;
         }
+        /* Новые стили для карточек оценок (аккордеон) */
+        .criteria-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+            margin: 15px 0;
+        }
+        .criteria-card {
+            background: #fff;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border-left: 4px solid;
+        }
+        .criteria-card .label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .criteria-card .value {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .penalty-card {
+            background: #fff0f0;
+            border-left-color: #e53e3e;
+        }
+        .score-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .quality-excellent { background: #c6f7d0; color: #0a5c2e; }
+        .quality-good { background: #d1fae5; color: #065f46; }
+        .quality-satisfactory { background: #fef3c7; color: #92400e; }
+        .quality-unsatisfactory { background: #fed7d7; color: #9b2c2c; }
+        .quality-dangerous { background: #fecaca; color: #991b1b; }
+        .criteria-tooltip {
+            cursor: help;
+            border-bottom: 1px dashed #2c7da0;
+        }
+        .btn-criteria {
+            background: #edf2f7;
+            color: #2c7da0;
+            border: 1px solid #cbd5e0;
+            margin-left: 10px;
+            margin-top: 10px;
+        }
+        .criteria-description {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .criteria-description h4 {
+            margin: 10px 0 5px;
+            color: #2c7da0;
+        }
+        .criteria-description p {
+            margin: 5px 0;
+        }
         @media (max-width: 768px) {
             .tabs { flex-wrap: wrap; }
             .tab { flex: 1; text-align: center; }
@@ -375,7 +453,26 @@
                 <div class="example-card">
                     <h3>Пример 2 (плохая суммаризация)</h3>
                     <p><strong>ЭМК (фрагмент):</strong></p>
-                    <pre id="exampleSource2">Пациент 65 лет, поступил с жалобами на кашель, одышку. Диагноз: COVID-19, двусторонняя пневмония. Лечение: цефепим, фавипиравир.</pre>
+                    <pre id="exampleSource2">
+Возраст: 65 лет
+Пол: мужской
+Дата поступления: 30.03.2026
+Жалобы при поступлении:Кашель, одышка, повышение температуры до 38,5 °C, общая слабость, снижение аппетита, боли в животе без чёткой локализации, вздутие живота.
+Анамнез заболевания:Заболел остро 5 дней назад, когда появились симптомы ОРВИ. Самостоятельно принимал жаропонижающие и противовирусные препараты без эффекта. Состояние прогрессивно ухудшалось, появилась одышка и боли в животе. Вызвана бригада СМП, доставлен в стационар.
+Эпидемиологический анамнез:Контакт с больным COVID-19 (супруга) в течение последних 10 дней.
+Объективный статус:Состояние средней тяжести. Сознание ясное. Кожные покровы бледные. Температура тела 38,2 °C. ЧДД — 24 в минуту, SpO₂ — 92% на атмосферном воздухе. АД — 140/85 мм рт. ст., ЧСС — 98 уд/мин. Живот мягкий, умеренно вздут, при пальпации — умеренная болезненность в мезогастрии. Перистальтика ослаблена. Печень и селезёнка не увеличены.
+Предварительный диагноз:COVID-19, двусторонняя пневмония, среднетяжёлое течение.
+Осложнения:Дыхательная недостаточность I–II степени.
+Лечение:
+Цефепим 2 г внутривенно 2 раза в сутки.
+Фавипиравир по схеме (1-й день — 1600 мг 2 раза в сутки, далее — 600 мг 2 раза в сутки).
+Оксигенотерапия по потребности.
+Симптоматическая терапия (жаропонижающие, инфузионная терапия).
+Дополнительные назначения:
+КТ органов грудной клетки — двусторонняя пневмония, КТ-2.
+КТ органов брюшной полости — для исключения абдоминальных осложнений (исключение мезентериального тромбоза, оценка состояния печени, селезёнки, почек, лимфоузлов).
+Лабораторные исследования: ОАК, биохимия крови (АЛТ, АСТ, креатинин, мочевина, СРБ, Д-димер), коагулограмма.
+Рекомендации:Наблюдение в условиях стационара, продолжение антибактериальной и противовирусной терапии, контроль сатурации и витальных функций.</pre>
                     <p><strong>Суммаризация (неверная):</strong></p>
                     <pre id="exampleSum2">Пациент с COVID-19, пневмония. Рекомендована вакцинация. Прогноз благоприятный.</pre>
                     <button class="copy-btn" data-copy="exampleSource2">Скопировать ЭМК</button>
@@ -384,13 +481,14 @@
             </div>
         </div>
 
-        <!-- Вкладка 3: Суммаризация -->
+        <!-- Вкладка 3: Суммаризация ЭМК -->
         <div id="tab3" class="tab-content">
             <h2>Суммаризация ЭМК через GigaChat</h2>
+            <h3>Загрузите файл</h3>
             <form id="summarizeForm" enctype="multipart/form-data">
                 <div class="file-input-group">
                     <input type="file" name="file" id="sumFile" required style="width: auto;">
-                    <button type="submit" id="summarizeBtn">Суммаризировать</button>
+                    <button type="submit" id="summarizeBtn">Суммаризировать файл</button>
                 </div>
                 <div id="sumFilePreview" class="file-preview-area" style="display: none;">
                     <div class="file-name-badge" id="sumFileNameBadge">
@@ -399,6 +497,13 @@
                     </div>
                     <textarea id="sumFileText" rows="6" placeholder="Текст файла будет отображён здесь..." readonly></textarea>
                 </div>
+            </form>
+            <hr>
+            <h3>Или введите текст вручную</h3>
+            <form id="manualSummarizeForm">
+                <label>Исходный текст ЭМК:</label><br>
+                <textarea id="manualSummarizeText" rows="8" placeholder="Вставьте текст ЭМК..."></textarea>
+                <button type="submit" id="manualSummarizeBtn">Суммаризировать текст</button>
             </form>
             <div id="summarizeResult" class="result" style="display:none;"></div>
         </div>
@@ -431,11 +536,19 @@
         </div>
     </div>
 
-    <!-- Модальное окно -->
+    <!-- Модальное окно для деталей оценки -->
     <div id="modal" class="modal">
         <div class="modal-content">
             <span class="close">&times;</span>
             <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Модальное окно для критериев оценки (отдельное) -->
+    <div id="criteriaModal" class="modal">
+        <div class="modal-content">
+            <span class="close" id="criteriaClose">&times;</span>
+            <div id="criteriaModalBody"></div>
         </div>
     </div>
 
@@ -497,7 +610,6 @@
                 btnElement.innerText = 'Скопировано!';
                 setTimeout(() => btnElement.innerText = original, 2000);
             } catch (err) {
-                // Fallback для небезопасных контекстов
                 const textarea = document.createElement('textarea');
                 textarea.value = text;
                 document.body.appendChild(textarea);
@@ -509,7 +621,6 @@
             }
         }
 
-        // Скачивание текста в TXT
         function downloadTxt(text, filename = 'summarization.txt') {
             const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
             const link = document.createElement('a');
@@ -519,7 +630,6 @@
             URL.revokeObjectURL(link.href);
         }
 
-        // Добавление кнопок копирования/скачивания для блока с текстом
         function addCopyDownloadButtons(container, text, btnContainerSelector = null) {
             const btnContainer = btnContainerSelector ? document.querySelector(btnContainerSelector) : container;
             if (!btnContainer) return;
@@ -542,29 +652,197 @@
             btnContainer.appendChild(downloadBtn);
         }
 
-        // --- Функции для отображения результата оценки ---
+        // --- Функции для цветового оформления и отображения ---
+        function getScoreColor(score, max) {
+            const percent = (score / max) * 100;
+            if (percent >= 90) return { bg: '#c6f7d0', text: '#0a5c2e' };
+            if (percent >= 75) return { bg: '#d1fae5', text: '#065f46' };
+            if (percent >= 50) return { bg: '#fef3c7', text: '#92400e' };
+            if (percent >= 25) return { bg: '#fed7d7', text: '#9b2c2c' };
+            return { bg: '#fecaca', text: '#991b1b' };
+        }
+
+        function getPenaltyColor(penalty) {
+            if (penalty >= -5) return { bg: '#c6f7d0', text: '#0a5c2e' };
+            if (penalty >= -10) return { bg: '#fef3c7', text: '#92400e' };
+            return { bg: '#fecaca', text: '#991b1b' };
+        }
+
+        function getFinalScoreClass(score) {
+            if (score >= 80) return 'quality-excellent';
+            if (score >= 65) return 'quality-good';
+            if (score >= 45) return 'quality-satisfactory';
+            if (score >= 25) return 'quality-unsatisfactory';
+            return 'quality-dangerous';
+        }
+
+        function getQualityText(score) {
+            if (score >= 80) return "отличное";
+            if (score >= 65) return "хорошее";
+            if (score >= 45) return "удовлетворительное";
+            if (score >= 25) return "неудовлетворительное";
+            return "опасное";
+        }
+
+        const criteriaDescriptions = {
+            complaints: "Жалобы – оценивается полнота описания жалоб пациента (боль, тошнота, слабость и т.д.). Максимум 15 баллов.",
+            disease_history: "Анамнез заболевания – длительность, связь с едой/лекарствами, данные осмотра, аллергии. Максимум 15 баллов.",
+            comorbidities: "Сопутствующие заболевания – перечень всех упомянутых в ЭМК заболеваний. Максимум 20 баллов.",
+            habits: "Вредные привычки – курение, алкоголь и др. Максимум 5 баллов.",
+            labs: "Лабораторные данные – полнота перечисления показателей (СРБ, лейкоциты и т.д.). Максимум 20 баллов.",
+            imaging: "Инструментальные исследования – описание КТ, МРТ, УЗИ с датами и деталями. Максимум 25 баллов.",
+            penalties: "Штрафы за галлюцинации, неверные значения, нерелевантную информацию и т.п. Отрицательные баллы."
+        };
+
+        function showCriteriaModal() {
+            let html = '<div class="criteria-description">';
+            html += '<h3>Критерии оценки суммаризации</h3>';
+            for (const [key, desc] of Object.entries(criteriaDescriptions)) {
+                html += `<h4>${key}</h4><p>${desc}</p>`;
+            }
+            html += '</div>';
+            document.getElementById('criteriaModalBody').innerHTML = html;
+            document.getElementById('criteriaModal').style.display = 'flex';
+        }
+
+        // Функция для создания блока результата с крестиком
+        function createResultContainer(htmlContent) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'result';
+            const closeBtn = document.createElement('button');
+            closeBtn.innerHTML = '✖';
+            closeBtn.className = 'close-result';
+            closeBtn.onclick = () => wrapper.remove();
+            wrapper.appendChild(closeBtn);
+            const contentDiv = document.createElement('div');
+            contentDiv.innerHTML = htmlContent;
+            wrapper.appendChild(contentDiv);
+            return wrapper;
+        }
+
+        // Функция отображения результата (общая)
+        function displayResultInContainer(container, htmlContent) {
+            container.innerHTML = '';
+            const resultWrapper = createResultContainer(htmlContent);
+            container.appendChild(resultWrapper);
+            container.style.display = 'block';
+        }
+
+        // --- Функции для отображения оценки (сворачиваемые блоки) ---
+        function renderEvaluationCard(data, title) {
+            let html = `<details class="detail-group">`;
+            html += `<summary>${title} (балл: ${data.final_score})</summary>`;
+            html += `<div class="score-badge ${getFinalScoreClass(data.final_score)}">Итоговый балл: ${data.final_score} (${getQualityText(data.final_score)})</div>`;
+            html += `<div class="criteria-grid">`;
+            const criteria = ['complaints', 'disease_history', 'comorbidities', 'habits', 'labs', 'imaging'];
+            const maxMap = { complaints:15, disease_history:15, comorbidities:20, habits:5, labs:20, imaging:25 };
+            for (const crit of criteria) {
+                const score = data[crit] || 0;
+                const max = maxMap[crit];
+                const color = getScoreColor(score, max);
+                html += `<div class="criteria-card" style="border-left-color: ${color.bg}; background: ${color.bg}10;">`;
+                html += `<div class="label criteria-tooltip" title="${criteriaDescriptions[crit]}">${crit}</div>`;
+                html += `<div class="value" style="color: ${color.text};">${score} / ${max}</div>`;
+                html += `</div>`;
+            }
+            const penalty = data.penalties || 0;
+            const penColor = getPenaltyColor(penalty);
+            html += `<div class="criteria-card penalty-card" style="border-left-color: ${penColor.bg};">`;
+            html += `<div class="label criteria-tooltip" title="Штрафы за ошибки (галлюцинации, неверные значения)">penalties</div>`;
+            html += `<div class="value" style="color: ${penColor.text};">${penalty}</div>`;
+            html += `</div>`;
+            html += `</div>`;
+            if (data.hallucinations && data.hallucinations.length) {
+                html += `<div><strong>Галлюцинации:</strong> ${data.hallucinations.join(', ')}</div>`;
+            }
+            if (data.wrong_values && data.wrong_values.length) {
+                html += `<div><strong>Неверные значения:</strong> ${data.wrong_values.join(', ')}</div>`;
+            }
+            html += `</details>`;
+            return html;
+        }
+
+        function fillModal(fullResult) {
+            const modalBody = document.getElementById('modal-body');
+            modalBody.innerHTML = '';
+            // Добавляем кнопку "Критерии оценки" в верхней части
+            const criteriaBtn = document.createElement('button');
+            criteriaBtn.textContent = 'Критерии оценки';
+            criteriaBtn.className = 'btn-criteria';
+            criteriaBtn.onclick = showCriteriaModal;
+            modalBody.appendChild(criteriaBtn);
+            modalBody.appendChild(document.createElement('hr'));
+
+            const r1Div = document.createElement('div');
+            r1Div.innerHTML = '<h3>Результаты первого этапа (R1)</h3>';
+            if (fullResult.r1_results && fullResult.r1_results.length) {
+                fullResult.r1_results.forEach((res, idx) => {
+                    r1Div.innerHTML += renderEvaluationCard(res, `Оценка №${idx+1}`);
+                });
+            } else {
+                r1Div.innerHTML += '<p>Нет данных R1</p>';
+            }
+            modalBody.appendChild(r1Div);
+
+            const r2Div = document.createElement('div');
+            r2Div.innerHTML = '<h3>Результаты пересмотра (R2)</h3>';
+            if (fullResult.r2_results && fullResult.r2_results.length) {
+                fullResult.r2_results.forEach((res, idx) => {
+                    r2Div.innerHTML += renderEvaluationCard(res, `Оценка №${idx+1}`);
+                });
+            } else {
+                r2Div.innerHTML += '<p>Нет данных R2</p>';
+            }
+            modalBody.appendChild(r2Div);
+
+            const finalDiv = document.createElement('div');
+            finalDiv.innerHTML = '<h3>Финальный вердикт (R3)</h3>';
+            if (fullResult.final) {
+                const final = fullResult.final;
+                finalDiv.innerHTML += `<div class="score-badge ${getFinalScoreClass(final.final_score)}">Итоговый балл: ${final.final_score} (${getQualityText(final.final_score)})</div>`;
+                if (final.verdict) finalDiv.innerHTML += `<p><strong>Вердикт:</strong> ${final.verdict}</p>`;
+                if (final.criteria) {
+                    finalDiv.innerHTML += `<div class="criteria-grid">`;
+                    const critMap = final.criteria;
+                    const maxMap = { complaints:15, disease_history:15, comorbidities:20, habits:5, labs:20, imaging:25 };
+                    for (const [key, val] of Object.entries(critMap)) {
+                        if (key === 'penalties') {
+                            const color = getPenaltyColor(val);
+                            finalDiv.innerHTML += `<div class="criteria-card penalty-card" style="border-left-color: ${color.bg};"><div class="label">${key}</div><div class="value" style="color: ${color.text};">${val}</div></div>`;
+                        } else {
+                            const max = maxMap[key];
+                            const color = getScoreColor(val, max);
+                            finalDiv.innerHTML += `<div class="criteria-card" style="border-left-color: ${color.bg};"><div class="label">${key}</div><div class="value" style="color: ${color.text};">${val} / ${max}</div></div>`;
+                        }
+                    }
+                    finalDiv.innerHTML += `</div>`;
+                }
+                if (final.all_hallucinations && final.all_hallucinations.length) {
+                    finalDiv.innerHTML += `<div><strong>Все галлюцинации:</strong> ${final.all_hallucinations.join(', ')}</div>`;
+                }
+            } else {
+                finalDiv.innerHTML += '<p>Нет данных R3</p>';
+            }
+            modalBody.appendChild(finalDiv);
+        }
+
+        // --- Функция отображения результата оценки на странице (первая вкладка) ---
         function displayResult(container, source, summary, fullResult) {
             const final = fullResult.final;
             if (!final) {
-                container.innerHTML = '<strong>Ошибка:</strong> Не удалось получить результат оценки';
+                displayResultInContainer(container, '<strong>Ошибка:</strong> Не удалось получить результат оценки');
                 container.classList.add('error');
                 return;
             }
-
             const score = final.final_score;
             const quality = final.quality;
             const safety = final.safety_flag ? '🚨' : '✅';
             const iodine = final.iodine_flag ? '⚠' : '✓';
-
             let html = `<strong>Исходная суммаризация:</strong><br><div id="originalSummaryText">${summary}</div>`;
             html += `<div class="action-buttons" id="originalSummaryButtons"></div><br>`;
             html += `<strong>Финальный результат:</strong> ${score}/100 (${quality}) ${safety} ${iodine}<br>`;
             html += `<button class="btn-details" data-full='${JSON.stringify(fullResult).replace(/'/g, "&apos;")}'>Показать детали</button>`;
-            const improveData = {
-                source: source,
-                summary: summary,
-                r1Results: fullResult.r1_results_full || fullResult.r1_results
-            };
+            const improveData = { source, summary, r1Results: fullResult.r1_results_full || fullResult.r1_results };
             const improvedKey = `${source}_${summary}`;
             const cachedImproved = window.improvedSummaries ? window.improvedSummaries[improvedKey] : null;
             if (cachedImproved) {
@@ -572,28 +850,35 @@
             } else {
                 html += `<button class="btn-improve" data-source='${source.replace(/'/g, "&apos;")}' data-summary='${summary.replace(/'/g, "&apos;")}' data-r1='${JSON.stringify(improveData.r1Results).replace(/'/g, "&apos;")}'>Улучшить суммаризацию</button>`;
             }
-            container.innerHTML = html;
+            // Создаём контейнер с крестиком
+            const resultWrapper = createResultContainer(html);
+            container.innerHTML = '';
+            container.appendChild(resultWrapper);
             container.classList.remove('error');
 
+            // Добавляем кнопки копирования для исходной суммаризации
             const originalSummaryText = document.getElementById('originalSummaryText').innerText;
             const originalBtnContainer = document.getElementById('originalSummaryButtons');
             addCopyDownloadButtons(originalBtnContainer, originalSummaryText, '#originalSummaryButtons');
 
-            container.querySelector('.btn-details').addEventListener('click', () => {
-                const full = JSON.parse(container.querySelector('.btn-details').getAttribute('data-full'));
-                fillModal(full);
-                document.getElementById('modal').style.display = 'flex';
-            });
-
-            const improveBtn = container.querySelector('.btn-improve');
-            const improvedBtn = container.querySelector('.btn-improved');
+            // Обработчик для кнопки деталей
+            const detailsBtn = resultWrapper.querySelector('.btn-details');
+            if (detailsBtn) {
+                detailsBtn.addEventListener('click', () => {
+                    const full = JSON.parse(detailsBtn.getAttribute('data-full'));
+                    fillModal(full);
+                    document.getElementById('modal').style.display = 'flex';
+                });
+            }
+            const improveBtn = resultWrapper.querySelector('.btn-improve');
+            const improvedBtn = resultWrapper.querySelector('.btn-improved');
             if (improveBtn) {
                 improveBtn.addEventListener('click', async (e) => {
                     const btn = e.target;
-                    const source = btn.getAttribute('data-source');
-                    const summary = btn.getAttribute('data-summary');
+                    const src = btn.getAttribute('data-source');
+                    const sum = btn.getAttribute('data-summary');
                     const r1Results = JSON.parse(btn.getAttribute('data-r1'));
-                    await improveSummary(source, summary, r1Results, btn, container);
+                    await improveSummary(src, sum, r1Results, btn, container);
                 });
             }
             if (improvedBtn) {
@@ -612,7 +897,6 @@
             formData.append('source', source);
             formData.append('summary', summary);
             formData.append('r1_results_full', JSON.stringify(r1Results));
-
             disableButton(improveBtn, 'Улучшение...');
             try {
                 const res = await fetch('/improve_summarization', { method: 'POST', body: formData });
@@ -651,55 +935,7 @@
             modal.style.display = 'flex';
         }
 
-        const compareModal = document.getElementById('compareModal');
-        const compareClose = compareModal.querySelector('.compare-close');
-        compareClose.addEventListener('click', () => compareModal.style.display = 'none');
-        window.addEventListener('click', (e) => {
-            if (e.target === compareModal) compareModal.style.display = 'none';
-        });
-
-        function fillModal(fullResult) {
-            const modalBody = document.getElementById('modal-body');
-            modalBody.innerHTML = '';
-
-            const r1Div = document.createElement('div');
-            r1Div.innerHTML = '<h3>Результаты первого этапа (R1)</h3>';
-            fullResult.r1_results.forEach((res, idx) => {
-                const details = document.createElement('details');
-                details.className = 'detail-group';
-                const summary = document.createElement('summary');
-                summary.textContent = `Оценка №${idx+1} (балл: ${res.final_score})`;
-                details.appendChild(summary);
-                const pre = document.createElement('pre');
-                pre.textContent = JSON.stringify(res, null, 2);
-                details.appendChild(pre);
-                r1Div.appendChild(details);
-            });
-            modalBody.appendChild(r1Div);
-
-            const r2Div = document.createElement('div');
-            r2Div.innerHTML = '<h3>Результаты пересмотра (R2)</h3>';
-            fullResult.r2_results.forEach((res, idx) => {
-                const details = document.createElement('details');
-                details.className = 'detail-group';
-                const summary = document.createElement('summary');
-                summary.textContent = `Оценка №${idx+1} (балл: ${res.final_score})`;
-                details.appendChild(summary);
-                const pre = document.createElement('pre');
-                pre.textContent = JSON.stringify(res, null, 2);
-                details.appendChild(pre);
-                r2Div.appendChild(details);
-            });
-            modalBody.appendChild(r2Div);
-
-            const finalDiv = document.createElement('div');
-            finalDiv.innerHTML = '<h3>Финальный вердикт (R3)</h3>';
-            const preFinal = document.createElement('pre');
-            preFinal.textContent = JSON.stringify(fullResult.final, null, 2);
-            finalDiv.appendChild(preFinal);
-            modalBody.appendChild(finalDiv);
-        }
-
+        // --- Модальные окна ---
         const modal = document.getElementById('modal');
         const closeBtn = modal.querySelector('.close');
         closeBtn.addEventListener('click', () => modal.style.display = 'none');
@@ -707,7 +943,21 @@
             if (e.target === modal) modal.style.display = 'none';
         });
 
-        // --- Общая функция для загрузки файла на сервер и отображения текста ---
+        const criteriaModal = document.getElementById('criteriaModal');
+        const criteriaClose = document.getElementById('criteriaClose');
+        criteriaClose.addEventListener('click', () => criteriaModal.style.display = 'none');
+        window.addEventListener('click', (e) => {
+            if (e.target === criteriaModal) criteriaModal.style.display = 'none';
+        });
+
+        const compareModal = document.getElementById('compareModal');
+        const compareClose = compareModal.querySelector('.compare-close');
+        compareClose.addEventListener('click', () => compareModal.style.display = 'none');
+        window.addEventListener('click', (e) => {
+            if (e.target === compareModal) compareModal.style.display = 'none';
+        });
+
+        // --- Загрузка файлов (без изменений) ---
         async function uploadFileToServer(file, targetTextarea, fileNameSpan, fileBadge, clearBtn, fileInput) {
             const formData = new FormData();
             formData.append('file', file);
@@ -720,7 +970,6 @@
             targetTextarea.value = data.text;
             fileNameSpan.textContent = file.name;
             fileBadge.style.display = 'inline-flex';
-            // Привязываем очистку
             clearBtn.onclick = () => {
                 targetTextarea.value = '';
                 fileBadge.style.display = 'none';
@@ -728,7 +977,6 @@
             };
         }
 
-        // --- Инициализация компонента загрузки файла с предпросмотром для ручного ввода ---
         function setupManualFileUpload(uploadBtnId, fileInputId, targetTextareaId, fileNameBadgeId, fileNameSpanId, clearBtnId) {
             const uploadBtn = document.getElementById(uploadBtnId);
             const fileInput = document.getElementById(fileInputId);
@@ -736,7 +984,6 @@
             const fileBadge = document.getElementById(fileNameBadgeId);
             const fileNameSpan = document.getElementById(fileNameSpanId);
             const clearBtn = document.getElementById(clearBtnId);
-
             uploadBtn.addEventListener('click', () => fileInput.click());
             fileInput.addEventListener('change', async (e) => {
                 const file = e.target.files[0];
@@ -750,10 +997,9 @@
                 } finally {
                     uploadBtn.disabled = false;
                     uploadBtn.innerText = 'Загрузить файл для ' + (targetTextareaId === 'manualSource' ? 'ЭМК' : 'суммаризации');
-                    fileInput.value = ''; // очищаем, чтобы можно было загрузить тот же файл снова
+                    fileInput.value = '';
                 }
             });
-            // Очистка уже привязана через uploadFileToServer, но для случая, когда очистка вызывается до загрузки
             clearBtn.onclick = () => {
                 textarea.value = '';
                 fileBadge.style.display = 'none';
@@ -761,11 +1007,9 @@
             };
         }
 
-        // Инициализация для ручной оценки (ЭМК и суммаризация)
         setupManualFileUpload('uploadSourceBtn', 'sourceFileUpload', 'manualSource', 'sourceFileNameBadge', 'sourceFileName', 'sourceClearFileBtn');
         setupManualFileUpload('uploadSummaryBtn', 'summaryFileUpload', 'manualSummary', 'summaryFileNameBadge', 'summaryFileName', 'summaryClearFileBtn');
 
-        // --- Для формы "Загрузить и оценить" (eval) ---
         const evalFileInput = document.getElementById('evalFile');
         const evalFilePreview = document.getElementById('evalFilePreview');
         const evalFileNameSpan = document.getElementById('evalFileName');
@@ -799,7 +1043,6 @@
             evalFileText.value = '';
         });
 
-        // --- Для вкладки суммаризации (sum) ---
         const sumFileInput = document.getElementById('sumFile');
         const sumFilePreview = document.getElementById('sumFilePreview');
         const sumFileNameSpan = document.getElementById('sumFileName');
@@ -833,7 +1076,7 @@
             sumFileText.value = '';
         });
 
-        // --- Проверка ручной формы ---
+        // --- Валидация ручной формы ---
         function validateManualForm(source, summary) {
             if (!source.trim() || !summary.trim()) {
                 alert('Оба поля должны быть заполнены.');
@@ -881,7 +1124,6 @@
             const source = document.getElementById('manualSource').value;
             const summary = document.getElementById('manualSummary').value;
             if (!validateManualForm(source, summary)) return;
-
             const formData = new URLSearchParams();
             formData.append('source', source);
             formData.append('summary', summary);
@@ -894,7 +1136,7 @@
                 if (res.ok) {
                     displayResult(resultDiv, source, summary, result);
                 } else {
-                    resultDiv.innerHTML = `<strong>Ошибка:</strong> ${result.detail || result}`;
+                    displayResultInContainer(resultDiv, `<strong>Ошибка:</strong> ${result.detail || result}`);
                     resultDiv.classList.add('error');
                 }
             } catch (err) {
@@ -904,7 +1146,7 @@
             }
         });
 
-        // Суммаризация
+        // --- Суммаризация файлом (существующая) ---
         const sumForm = document.getElementById('summarizeForm');
         const summarizeBtn = document.getElementById('summarizeBtn');
         sumForm.addEventListener('submit', async (e) => {
@@ -922,18 +1164,60 @@
                 const resultDiv = document.getElementById('summarizeResult');
                 resultDiv.style.display = 'block';
                 if (res.ok) {
-                    resultDiv.innerHTML = `<strong>Суммаризация:</strong><br><div id="summarizedText">${data.summary}</div><div class="action-buttons" id="summarizeButtons"></div>`;
+                    const html = `<strong>Суммаризация:</strong><br><div id="summarizedText">${data.summary}</div><div class="action-buttons" id="summarizeButtons"></div>`;
+                    const wrapper = createResultContainer(html);
+                    resultDiv.innerHTML = '';
+                    resultDiv.appendChild(wrapper);
                     const summaryText = document.getElementById('summarizedText').innerText;
                     const btnContainer = document.getElementById('summarizeButtons');
                     addCopyDownloadButtons(btnContainer, summaryText, '#summarizeButtons');
                 } else {
-                    resultDiv.innerHTML = `<strong>Ошибка:</strong> ${data.detail || data}`;
+                    displayResultInContainer(resultDiv, `<strong>Ошибка:</strong> ${data.detail || data}`);
                     resultDiv.classList.add('error');
                 }
             } catch (err) {
                 alert(`Ошибка: ${err}`);
             } finally {
                 enableButton(summarizeBtn);
+            }
+        });
+
+        // --- Ручная суммаризация текста (новый эндпоинт) ---
+        const manualSummarizeForm = document.getElementById('manualSummarizeForm');
+        const manualSummarizeBtn = document.getElementById('manualSummarizeBtn');
+        manualSummarizeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = document.getElementById('manualSummarizeText').value.trim();
+            if (!text) {
+                alert('Введите текст для суммаризации');
+                return;
+            }
+            disableButton(manualSummarizeBtn);
+            try {
+                const res = await fetch('/summarize_text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+                const data = await res.json();
+                const resultDiv = document.getElementById('summarizeResult');
+                resultDiv.style.display = 'block';
+                if (res.ok) {
+                    const html = `<strong>Суммаризация:</strong><br><div id="summarizedTextManual">${data.summary}</div><div class="action-buttons" id="summarizeButtonsManual"></div>`;
+                    const wrapper = createResultContainer(html);
+                    resultDiv.innerHTML = '';
+                    resultDiv.appendChild(wrapper);
+                    const summaryText = document.getElementById('summarizedTextManual').innerText;
+                    const btnContainer = document.getElementById('summarizeButtonsManual');
+                    addCopyDownloadButtons(btnContainer, summaryText, '#summarizeButtonsManual');
+                } else {
+                    displayResultInContainer(resultDiv, `<strong>Ошибка:</strong> ${data.detail || data}`);
+                    resultDiv.classList.add('error');
+                }
+            } catch (err) {
+                alert(`Ошибка: ${err}`);
+            } finally {
+                enableButton(manualSummarizeBtn);
             }
         });
 
@@ -960,7 +1244,6 @@
 
         // Инициализация кнопок копирования на вкладке примеров
         document.querySelectorAll('.copy-btn').forEach(btn => {
-            // Защита от двойного добавления
             if (btn.dataset.listener) return;
             btn.dataset.listener = 'true';
             btn.addEventListener('click', () => {

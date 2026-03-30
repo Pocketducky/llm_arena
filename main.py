@@ -6,6 +6,7 @@
 ########################################
 import json
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi.params import Body
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import uuid
@@ -109,6 +110,14 @@ async def summarize(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(400, f"Ошибка извлечения текста: {e}")
     summary = await summarize_with_gigachat(source_text)
+    return {"summary": summary}
+
+
+@app.post("/summarize_text")
+async def summarize_text(text: str = Body(..., embed=True)):
+    if not text:
+        raise HTTPException(400, "No text provided")
+    summary = await summarize_with_gigachat(text)
     return {"summary": summary}
 
 

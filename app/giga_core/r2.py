@@ -63,7 +63,7 @@ async def score_gigachat_r2(my_r1: dict, peer1_r1: dict, peer2_r1: dict, summary
     pen = float(result.get("penalties", 0))
 
     positive = comp + dh + co + hab + lab + img
-    final_score = max(0.0, min(100.0, round(positive + pen, 1)))
+    final_score = max(0.0, min(100.0, round(positive - pen if pen > 0 else positive + pen, 1)))
 
     return {
         "complaints": comp,

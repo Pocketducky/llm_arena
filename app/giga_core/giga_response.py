@@ -14,8 +14,8 @@ async def ask_gigachat(prompt: str, desc: str = "", temperature: float = 0.1) ->
     try:
         result = extract_json(raw)
         logger.info(
-            "Уровень запроса: %s\nПромпт: %s\nОтвет модели: %s",   # Можно добавить: \nПромпт: %s; prompt
-            desc,  prompt, result
+            "Уровень запроса: %s\nОтвет модели: %s",   # Можно добавить: \nПромпт: %s; prompt
+            desc, result
         )
     except Exception:
         try:

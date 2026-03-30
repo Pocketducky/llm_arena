@@ -38,7 +38,7 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
         emr_facts = facts,
         summary = summary
     )
-    coverage = await ask_gigachat(coverage_prompt, "Соответствие ЭМК/суммаризации")
+    coverage = await ask_gigachat(coverage_prompt, "Соответствие ЭМК/суммаризации", temperature=0.0)
 
     errors_prompts = PROMPT_ERRORS.format(
         source_short = source,
@@ -51,8 +51,10 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
              "habits": 5, "labs": 20, "imaging": 25}
     scores = {cat: _calc_coverage_score(coverage.get(cat, {}), mx)
               for cat, mx in MAXES.items()}
+    print(f"{"="*50}\n{scores}\n{"="*50}")
 
     pen = float(errors.get("penalties", 0))
+    print(f"{"="*50}\n{pen}\n{"="*50}")
 
     # iodine: только если аллергия реально есть в ЭМК
     iodine_in_source = bool(facts.get("iodine_allergy_in_source", False))
@@ -64,7 +66,7 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
                       and bool(errors.get("iodine_missing", False)))
 
     positive = sum(scores.values())
-    final_score = max(0.0, min(100.0, round(positive + pen, 1)))
+    final_score = max(0.0, min(100.0, round(positive - pen if pen > 0 else positive + pen, 1)))
 
     return {
         **scores,
