@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Оценка суммаризаций ЭМК</title>
     <style>
-        /* (стили без изменений, добавлены новые классы) */
+        * {
+            box-sizing: border-box;
+        }
+        html {
+            -webkit-text-size-adjust: 100%;
+            -webkit-tap-highlight-color: transparent;
+        }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f5f7fa;
@@ -367,11 +373,140 @@
             margin: 5px 0;
         }
         @media (max-width: 768px) {
-            .tabs { flex-wrap: wrap; }
-            .tab { flex: 1; text-align: center; }
-            .team-member { width: 120px; }
-            .team-member img { width: 100px; height: 100px; }
+    /* Вкладки — перенос, но без лишних отступов */
+        .tabs {
+            flex-wrap: wrap;
+            padding: 0 10px;
         }
+        .tab {
+            flex: 1 0 auto;
+            text-align: center;
+            padding: 10px 12px;
+            font-size: 14px;
+        }
+
+        /* Основной контейнер */
+        .container {
+            border-radius: 0;
+            margin: 0 -20px; /* компенсируем отступы body, чтобы контент занимал всю ширину */
+            width: calc(100% + 40px);
+        }
+        body {
+            padding: 10px;
+        }
+
+        /* Внутренние отступы вкладок */
+        .tab-content {
+            padding: 20px 15px;
+        }
+
+        /* Поля ввода и текстовые области — на всю ширину */
+        input[type="file"], textarea {
+            max-width: 100%;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* Группа кнопок с файлом — перенос на новую строку */
+        .file-input-group {
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 15px 0;
+        }
+        .file-input-group button,
+        .file-input-group input[type="file"] {
+            width: 100%;
+            margin: 0;
+        }
+        .file-name-badge {
+            margin-left: 0;
+            width: 100%;
+            justify-content: space-between;
+        }
+
+        /* Сетка критериев — одна колонка */
+        .criteria-grid {
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        /* Карточки примеров — вертикально */
+        .examples {
+            flex-direction: column;
+            gap: 20px;
+        }
+        .example-card {
+            min-width: auto;
+        }
+
+        /* Кнопки внутри карточек примеров */
+        .example-card .copy-btn {
+            display: inline-block;
+            margin: 5px 5px 0 0;
+        }
+
+        /* Модальные окна */
+        .modal-content {
+            width: 95%;
+            max-width: 95%;
+            padding: 15px;
+        }
+
+        /* Сравнение суммаризаций — колонки вертикально */
+        .compare-container {
+            flex-direction: column;
+            gap: 20px;
+        }
+        .compare-col {
+            width: 100%;
+        }
+
+        /* Кнопки действий в результатах */
+        .btn-details, .btn-improve, .btn-improved {
+            display: inline-block;
+            margin: 5px 5px 0 0;
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+
+        /* Стили для команды */
+        .team {
+            gap: 20px;
+        }
+        .team-member {
+            width: 45%;
+            min-width: 120px;
+        }
+        .team-member img {
+            width: 100px;
+            height: 100px;
+        }
+
+        /* Текстовые блоки */
+        .result {
+            font-size: 12px;
+            padding: 12px;
+        }
+        .result .close-result {
+            top: 6px;
+            right: 8px;
+            font-size: 18px;
+        }
+
+        /* Заголовки */
+        h2 {
+            font-size: 1.5rem;
+        }
+        h3 {
+            font-size: 1.2rem;
+        }
+
+        /* Кнопка «Критерии оценки» */
+        .btn-criteria {
+            margin-left: 0;
+            margin-top: 5px;
+        }
+    }
     </style>
 </head>
 <body>
@@ -521,23 +656,23 @@
             <h2>Наша команда</h2>
             <div class="team">
                 <div class="team-member">
-                    <img src="/static/images/IMG_8998.heic" alt="Участник 1">
+                    <img src="./static/images/IMG_Il.heic" alt="Участник 1">
                     <h3>Илья Ройзен</h3>
-                    <p>Разработчик</p>
+                    <p>Разработчик full-stack </p>
                 </div>
                 <div class="team-member">
-                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 2">
-                    <h3>Петр Петров</h3>
+                    <img src="static/images/IMG_Art.jpg" alt="Участник 2">
+                    <h3>Артём Осадчий</h3>
                     <p>Лидер</p>
                 </div>
                 <div class="team-member">
-                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 3">
-                    <h3>Мария Сидорова</h3>
-                    <p>Аналитик</p>
+                    <img src="static/images/IMG_Jul.jpg" alt="Участник 3">
+                    <h3>Юлия Вчерашняя</h3>
+                    <p>Медицинский специалист</p>
                 </div>
                 <div class="team-member">
-                    <img src="https://via.placeholder.com/150?text=Фото" alt="Участник 4">
-                    <h3>Алексей Смирнов</h3>
+                    <img src="static/images/i.webp" alt="Участник 4">
+                    <h3>Дмитрий Пирогов</h3>
                     <p>ML-инженер</p>
                 </div>
             </div>
@@ -638,7 +773,7 @@
             URL.revokeObjectURL(link.href);
         }
 
-        function addCopyDownloadButtons(container, text, btnContainerSelector = null) {
+        function addCopyDownloadButtons(container, text, btnContainerSelector = null, filename) {
             const btnContainer = btnContainerSelector ? document.querySelector(btnContainerSelector) : container;
             if (!btnContainer) return;
             const existingCopy = btnContainer.querySelector('.copy-summary-btn');
@@ -910,13 +1045,18 @@
         window.improvedSummaries = window.improvedSummaries || {};
 
         async function improveSummary(source, summary, r1Results, improveBtn, resultContainer) {
-            const formData = new URLSearchParams();
-            formData.append('source', source);
-            formData.append('summary', summary);
-            formData.append('r1_results_full', JSON.stringify(r1Results));
+            const payload = {
+                source: source,
+                summary: summary,
+                r1_results_full: r1Results   // r1Results уже объект
+            };
             disableButton(improveBtn, 'Улучшение...');
             try {
-                const res = await fetch('/improve_summarization', { method: 'POST', body: formData });
+                const res = await fetch('/improve_summarization', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
                 const data = await res.json();
                 if (res.ok) {
                     const improvedText = data.improved_summary;
@@ -1141,12 +1281,14 @@
             const source = document.getElementById('manualSource').value;
             const summary = document.getElementById('manualSummary').value;
             if (!validateManualForm(source, summary)) return;
-            const formData = new URLSearchParams();
-            formData.append('source', source);
-            formData.append('summary', summary);
+            const payload = { source, summary };
             disableButton(manualEvalBtn);
             try {
-                const res = await fetch('/evaluate_text', { method: 'POST', body: formData });
+                const res = await fetch('/evaluate_text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
                 const result = await res.json();
                 const resultDiv = document.getElementById('manualResult');
                 resultDiv.style.display = 'block';

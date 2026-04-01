@@ -1,7 +1,10 @@
+import asyncio
 import httpx
 from app.services.giga_logs import logger
 from app.services.giga_token import get_giga_token
 
+# Семафор ограничивает одновременные запросы до 1
+_gigachat_semaphore = asyncio.Semaphore(1)
 
 async def gigachat_completion(prompt: str, temperature: float = 0.1, max_tokens: int = 2048) -> str:
     """
@@ -30,27 +33,28 @@ async def gigachat_completion(prompt: str, temperature: float = 0.1, max_tokens:
         "max_tokens": max_tokens,
         "stream": False
     }
-    async with httpx.AsyncClient(verify=False, timeout=60) as client:
-        response = await client.post(url, headers=headers, json=payload,)
-        response.raise_for_status()
-        data = response.json()
-        logs = {
-            "created_at": data.get("created"),
-            "model": data.get("model"),
-            "tokens": data.get("usage"),
-        }
-        logger.info(
-            "Запрос к GigaChat:\n"
-            "  Модель: %(model)s\n"
-            # "  Промпт: %(prompt)s\n"
-            # "  Ответ: %(response)s\n"
-            "  Токены: %(tokens)s",
-            {
-                "model": logs["model"],
-                # "prompt": prompt,
-                # "response": data["choices"][0]["message"]["content"],
-                "tokens": logs["tokens"]
+    async with _gigachat_semaphore:
+        async with httpx.AsyncClient(verify=False, timeout=60) as client:
+            response = await client.post(url, headers=headers, json=payload,)
+            response.raise_for_status()
+            data = response.json()
+            logs = {
+                "created_at": data.get("created"),
+                "model": data.get("model"),
+                "tokens": data.get("usage"),
             }
-        )
+            logger.info(
+                "Запрос к GigaChat:\n"
+                "  Модель: %(model)s\n"
+                # "  Промпт: %(prompt)s\n"
+                # "  Ответ: %(response)s\n"
+                "  Токены: %(tokens)s",
+                {
+                    "model": logs["model"],
+                    # "prompt": prompt,
+                    # "response": data["choices"][0]["message"]["content"],
+                    "tokens": logs["tokens"]
+                }
+            )
 
-        return data["choices"][0]["message"]["content"]
+            return data["choices"][0]["message"]["content"]

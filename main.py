@@ -2,13 +2,20 @@
 ########################################
 # Запуск:
 #  Разработка: uvicorn main:app --reload
-#  Прод: uvicorn main:app --host 0.0.0.0 --port 8000
+#  Прод: 1) uvicorn main:app --host 0.0.0.0 --port 8000
+#        2) В другом терминале: nport http 8000 --subdomain {название} ИЛИ ssh -R 80:localhost:8000 serveo.net
+#
+# Если по локальной сети: ifconfig
+# Затем найти в выводе: en0 и ы нем inet (вида 10.246.24.106)
+# Затем: uvicorn main:app --host 0.0.0.0 --port 8000
+# И заходим: http://<IP_вашего_компьютера>:8000
 ########################################
 import json
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.params import Body
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import asyncio
 from typing import Dict
@@ -17,10 +24,17 @@ from app.giga_core.giga_evaluate import evaluate_with_gigachat
 from app.giga_core.giga_improve import improve_summarization_gigachat
 from app.giga_core.giga_summarize import summarize_with_gigachat
 from app.core.utils import extract_text_from_file
-import app.services.giga_logs
 
 # Инициализация
 app = FastAPI(title="Оценка суммаризаций ЭМК")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # для теста можно "*", но в проде лучше ограничить
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Подключаем статику
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -56,14 +70,11 @@ async def upload_for_evaluation(file: UploadFile = File(...)):
 
 
 @app.post("/evaluate_text")
-async def evaluate_text(source: str = Form(...), summary: str = Form(...)):
-    """
-    Оценка суммаризации ЭМК
-
-    :param source: ЭМК
-    :param summary: Суммаризация ЭМК
-    :return: Метрики оценки
-    """
+async def evaluate_text(payload: dict = Body(...)):
+    source = payload.get("source")
+    summary = payload.get("summary")
+    if not source or not summary:
+        raise HTTPException(400, "source and summary required")
     try:
         result = await evaluate_with_gigachat(source, summary)
         return result
@@ -85,10 +96,15 @@ async def extract_text(file: UploadFile = File(...)):
 
 
 @app.post("/improve_summarization")
-async def improve_summarization(source: str = Form(...), summary: str = Form(...), r1_results_full: str = Form(...)):
-    """Улучшает суммаризацию на основе трёх R1 оценок."""
+async def improve_summarization(payload: dict = Body(...)):
+    source = payload.get("source")
+    summary = payload.get("summary")
+    r1_results_full = payload.get("r1_results_full")
+    if not source or not summary or r1_results_full is None:
+        raise HTTPException(400, "Missing fields")
     try:
-        r1_list = json.loads(r1_results_full)
+        # r1_results_full может быть списком или строкой – приводим к списку
+        r1_list = r1_results_full if isinstance(r1_results_full, list) else json.loads(r1_results_full)
         if len(r1_list) != 3:
             raise ValueError("Ожидается ровно три оценки R1")
         improved = await improve_summarization_gigachat(source, summary, *r1_list)
