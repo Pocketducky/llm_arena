@@ -59,7 +59,7 @@ async def score_gigachat_r3(r2_results: list[dict]) -> dict:
     pen = float(criteria.get("penalties", 0))
 
     positive = comp + dh + co + hab + lab + img
-    final_score = max(0.0, min(100.0, round(positive - pen if pen > 0 else positive + pen, 1)))
+    final_score = max(0.0, min(100.0, round(positive - abs(pen), 1)))
 
     quality = str(result.get("quality", "—"))
     verdict_text = str(result.get("verdict", ""))

@@ -1,26 +1,46 @@
-from app.core.utils import extract_json, repair_json
+from app.core.utils import extract_json
 from app.services.giga import gigachat_completion
-import json
 from app.services.giga_logs import logger
+import asyncio
 
-async def ask_gigachat(prompt: str, desc: str = "", temperature: float = 0.1) -> dict | str:
+MAX_RETRIES = 2
+RETRY_DELAY = 3.0
+
+
+async def ask_gigachat(prompt: str, desc: str = "", temperature: float = 0.1) -> dict:
     """
-    Полный запрос в гигачат с форматированием ответа
-    :param prompt:
-    :param desc: Метка запроса (R1, R2, R3)
-    :return:
+    Запрос в GigaChat с автоматическим retry при transient-ошибках.
+
+    :param prompt: текст промпта
+    :param desc: метка запроса для логов (R1, R2, R3, Суммаризация и т.д.)
+    :param temperature: температура генерации
+    :return: распарсенный dict из JSON-ответа
+    :raises ValueError: если после всех попыток не удалось получить валидный JSON
+    :raises RuntimeError: если API недоступен после всех retry
     """
-    raw = await gigachat_completion(prompt, temperature=temperature)
-    try:
-        result = extract_json(raw)
-        logger.info(
-            "Уровень запроса: %s\nОтвет модели: %s",   # Можно добавить: \nПромпт: %s; prompt
-            desc, result
-        )
-    except Exception:
+    last_error = None
+
+    for attempt in range(1, MAX_RETRIES + 2):
         try:
-            repaired = repair_json(raw)
-            result = json.loads(repaired)
-        except Exception:
-            raise ValueError(f"❌GigaChat не вернул JSON для {desc}: {raw}")
-    return result
+            raw = await gigachat_completion(prompt, temperature=temperature)
+            result = extract_json(raw)
+            logger.info("Уровень запроса: %s\nОтвет модели: %s", desc, result)
+            return result
+
+        except ValueError as e:
+            # JSON parsing error — retry with repaired JSON
+            last_error = e
+            logger.warning(f"  [{desc}] Попытка {attempt}: ошибка парсинга JSON — {e}")
+            if attempt <= MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+
+        except Exception as e:
+            # Network, timeout, token expiry, etc.
+            last_error = e
+            logger.warning(f"  [{desc}] Попытка {attempt}: {type(e).__name__} — {e}")
+            if attempt <= MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY * attempt)
+
+    raise RuntimeError(
+        f"❌ GigaChat не ответил после {MAX_RETRIES + 1} попыток для [{desc}]: {last_error}"
+    )

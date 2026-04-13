@@ -4,6 +4,54 @@ from app.core.prompts import PROMPT_R2
 from app.giga_core.giga_response import ask_gigachat
 
 
+def _compact_for_r2(r: dict) -> str:
+    """
+    Формирует отчёт для R2, включающий не только баллы, но и
+    диагностические данные: что покрыто/пропущено и какие ошибки найдены.
+    Это позволяет модели R2 понять ПРИЧИНУ снижения баллов коллегами.
+    """
+    # Базовые баллы и флаги
+    compact = {
+        "complaints": r.get("complaints", 0),
+        "disease_history": r.get("disease_history", 0),
+        "comorbidities": r.get("comorbidities", 0),
+        "habits": r.get("habits", 0),
+        "labs": r.get("labs", 0),
+        "imaging": r.get("imaging", 0),
+        "penalties": r.get("penalties", 0),
+        "final_score": r.get("final_score", 0),
+        "iodine_flag": r.get("iodine_flag", False),
+        "safety_flag": r.get("safety_flag", False),
+        "quality": r.get("quality", "—"),
+    }
+
+    # Покр. детализация — сокращаем до только missing (пропущенные факты)
+    coverage_detail = r.get("coverage_detail", {})
+    if coverage_detail:
+        missing_only = {}
+        for cat, detail in coverage_detail.items():
+            missing = detail.get("missing", [])
+            if missing:
+                missing_only[cat] = missing
+        if missing_only:
+            compact["missing_facts"] = missing_only
+
+    # Ошибки — только если есть
+    hallucinations = r.get("hallucinations", [])
+    if hallucinations:
+        compact["hallucinations"] = hallucinations
+
+    wrong_values = r.get("wrong_values", [])
+    if wrong_values:
+        compact["wrong_values"] = wrong_values
+
+    irrelevant = r.get("irrelevant", [])
+    if irrelevant:
+        compact["irrelevant"] = irrelevant
+
+    return json.dumps(compact, ensure_ascii=False, indent=2)
+
+
 async def score_gigachat_r2(my_r1: dict, peer1_r1: dict, peer2_r1: dict, summary: str) -> dict:
     """
     Перекрестная оценка суммаризаций на первом этапе
@@ -39,17 +87,11 @@ async def score_gigachat_r2(my_r1: dict, peer1_r1: dict, peer2_r1: dict, summary
     :return: Оценка в формате: {"complaints":0,"disease_history":0,"comorbidities":0,"habits":0,"labs":0,"imaging":0,"penalties":0,"iodine_flag":false,"safety_flag":false,"hallucinations":[],"quality":"отличное/хорошее/удовлетворительное/неудовлетворительное/опасное"}
     """
 
-    def compact(r: dict) -> str:
-        return json.dumps({k: v for k, v in r.items()
-                           if k not in ("missing_clinical", "safety_reason",
-                                        "wrong_values", "hallucinations")},
-                          ensure_ascii=False)
-
     prompt_r2 = PROMPT_R2.format(
         summary=summary,
-        my_report=compact(my_r1),
-        peer_1=compact(peer1_r1),
-        peer_2=compact(peer2_r1),
+        my_report=_compact_for_r2(my_r1),
+        peer_1=_compact_for_r2(peer1_r1),
+        peer_2=_compact_for_r2(peer2_r1),
     )
 
     result = await ask_gigachat(prompt_r2, "R2-пересмотр")
@@ -63,7 +105,7 @@ async def score_gigachat_r2(my_r1: dict, peer1_r1: dict, peer2_r1: dict, summary
     pen = float(result.get("penalties", 0))
 
     positive = comp + dh + co + hab + lab + img
-    final_score = max(0.0, min(100.0, round(positive - pen if pen > 0 else positive + pen, 1)))
+    final_score = max(0.0, min(100.0, round(positive - abs(pen), 1)))
 
     return {
         "complaints": comp,
@@ -78,4 +120,5 @@ async def score_gigachat_r2(my_r1: dict, peer1_r1: dict, peer2_r1: dict, summary
         "safety_flag": bool(result.get("safety_flag", False)),
         "hallucinations": list(result.get("hallucinations", [])),
         "quality": str(result.get("quality", "—")),
+        "r2_reason": str(result.get("r2_reason", "")),
     }

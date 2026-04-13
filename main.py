@@ -2,17 +2,11 @@
 ########################################
 # Запуск:
 #  Разработка: uvicorn main:app --reload
-#  Прод: 1) uvicorn main:app --host 0.0.0.0 --port 8000
-#        2) В другом терминале: nport http 8000 --subdomain {название} ИЛИ ssh -R 80:localhost:8000 serveo.net
-#
-# Если по локальной сети: ifconfig
-# Затем найти в выводе: en0 и ы нем inet (вида 10.246.24.106)
-# Затем: uvicorn main:app --host 0.0.0.0 --port 8000
-# И заходим: http://<IP_вашего_компьютера>:8000
+#  Прод: uvicorn main:app --host 0.0.0.0 --port 8000
 ########################################
 import json
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.params import Body
+import time
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,139 +18,183 @@ from app.giga_core.giga_evaluate import evaluate_with_gigachat
 from app.giga_core.giga_improve import improve_summarization_gigachat
 from app.giga_core.giga_summarize import summarize_with_gigachat
 from app.core.utils import extract_text_from_file
+from app.core.schemas import (
+    EvaluateRequest,
+    ImproveRequest,
+    SummarizeTextRequest,
+    SummarizeResponse,
+    UploadResponse,
+    ExtractTextResponse,
+    ImproveResponse,
+    StatusResponse,
+    EvaluateResponse,
+)
 
-# Инициализация
-app = FastAPI(title="Оценка суммаризаций ЭМК")
+# ── Константы ────────────────────────────────────────────────────
+
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+TASK_TTL = 3600  # 1 час — после этого задача удаляется из памяти
+TASK_CLEANUP_INTERVAL = 300  # проверять каждые 5 минут
+
+# ── Инициализация ────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Оценка суммаризаций ЭМК",
+    description="API для суммаризации и оценки медицинских ЭМК через GigaChat",
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # для теста можно "*", но в проде лучше ограничить
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,  # credentials=True с origins=["*"] невалиден по CORS-spec
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключаем статику
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Хранилище задач
+# ── Хранилище задач ──────────────────────────────────────────────
+
 tasks: Dict[str, dict] = {}
 
-# Эндпоинты
-@app.post("/upload_for_evaluation")
+
+def _cleanup_expired_tasks():
+    """Удаляет завершённые/ошибочные задачи старше TASK_TTL."""
+    now = time.time()
+    expired = [
+        tid for tid, t in tasks.items()
+        if t["status"] in ("completed", "error") and (now - t.get("created_at", 0)) > TASK_TTL
+    ]
+    for tid in expired:
+        del tasks[tid]
+    if expired:
+        pass  # можно добавить логирование при необходимости
+
+
+async def periodic_cleanup():
+    while True:
+        await asyncio.sleep(TASK_CLEANUP_INTERVAL)
+        _cleanup_expired_tasks()
+
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(periodic_cleanup())
+
+
+# ── Эндпоинты ────────────────────────────────────────────────────
+
+@app.post("/upload_for_evaluation", response_model=UploadResponse)
 async def upload_for_evaluation(file: UploadFile = File(...)):
-    """
-    Загрузка документа -> Суммаризация -> Оценка
-    :param file: загруженный файл в формате txt, docx, pdf
-    :return: суммаризация ЭМК, запрос на оценку
-    """
+    """Загрузка документа → суммаризация → фоновая оценка."""
     content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"Файл слишком большой (макс. {MAX_FILE_SIZE // 1024 // 1024} MB)")
+
     try:
         source_text = extract_text_from_file(content, file.filename)
     except Exception as e:
         raise HTTPException(400, f"Ошибка извлечения текста: {e}")
 
-    summary = await summarize_with_gigachat(source_text)
+    try:
+        summary = await summarize_with_gigachat(source_text)
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка суммаризации: {e}")
 
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
         "status": "running",
         "source": source_text,
         "summary": summary,
-        "result": None
+        "result": None,
+        "created_at": time.time(),
     }
     asyncio.create_task(run_evaluation_task(task_id, source_text, summary))
-    return {"task_id": task_id, "summary": summary}
+    return UploadResponse(task_id=task_id, summary=summary)
 
 
-@app.post("/evaluate_text")
-async def evaluate_text(payload: dict = Body(...)):
-    source = payload.get("source")
-    summary = payload.get("summary")
-    if not source or not summary:
-        raise HTTPException(400, "source and summary required")
+@app.post("/evaluate_text", response_model=EvaluateResponse)
+async def evaluate_text(payload: EvaluateRequest):
+    """Синхронная оценка суммаризации."""
     try:
-        result = await evaluate_with_gigachat(source, summary)
+        result = await evaluate_with_gigachat(payload.source, payload.summary)
         return result
     except Exception as e:
-        raise HTTPException(500, f"Ошибка оценки: {str(e)}")
+        raise HTTPException(500, f"Ошибка оценки: {e}")
 
 
-@app.post("/extract_text")
+@app.post("/extract_text", response_model=ExtractTextResponse)
 async def extract_text(file: UploadFile = File(...)):
-    """
-    Извлекает текст из загруженного файла (txt, docx, pdf) и возвращает его.
-    """
+    """Извлекает текст из загруженного файла (txt, docx, pdf)."""
     content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"Файл слишком большой (макс. {MAX_FILE_SIZE // 1024 // 1024} MB)")
     try:
         text = extract_text_from_file(content, file.filename)
-        return {"text": text}
+        return ExtractTextResponse(text=text)
     except Exception as e:
-        raise HTTPException(400, f"Ошибка извлечения текста: {str(e)}")
+        raise HTTPException(400, f"Ошибка извлечения текста: {e}")
 
 
-@app.post("/improve_summarization")
-async def improve_summarization(payload: dict = Body(...)):
-    source = payload.get("source")
-    summary = payload.get("summary")
-    r1_results_full = payload.get("r1_results_full")
-    if not source or not summary or r1_results_full is None:
-        raise HTTPException(400, "Missing fields")
+@app.post("/improve_summarization", response_model=ImproveResponse)
+async def improve_summarization(payload: ImproveRequest):
+    """Улучшение суммаризации на основе оценок R1."""
     try:
-        # r1_results_full может быть списком или строкой – приводим к списку
-        r1_list = r1_results_full if isinstance(r1_results_full, list) else json.loads(r1_results_full)
+        r1_list = (
+            payload.r1_results_full
+            if isinstance(payload.r1_results_full, list)
+            else json.loads(payload.r1_results_full)
+        )
         if len(r1_list) != 3:
-            raise ValueError("Ожидается ровно три оценки R1")
-        improved = await improve_summarization_gigachat(source, summary, *r1_list)
-        return {"improved_summary": improved}
+            raise HTTPException(400, "Ожидается ровно три оценки R1")
+        improved = await improve_summarization_gigachat(
+            payload.source, payload.summary, *r1_list
+        )
+        return ImproveResponse(improved_summary=improved)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, f"Ошибка улучшения: {str(e)}")
+        raise HTTPException(500, f"Ошибка улучшения: {e}")
 
 
-@app.post("/summarize")
+@app.post("/summarize", response_model=SummarizeResponse)
 async def summarize(file: UploadFile = File(...)):
-    """
-    Суммаризация ЭМК
-    :param file: загруженный файл в формате txt, docx, pdf
-    :return: суммаризация ЭМК
-    """
+    """Суммаризация ЭМК из файла."""
     content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(413, f"Файл слишком большой (макс. {MAX_FILE_SIZE // 1024 // 1024} MB)")
     try:
         source_text = extract_text_from_file(content, file.filename)
     except Exception as e:
         raise HTTPException(400, f"Ошибка извлечения текста: {e}")
-    summary = await summarize_with_gigachat(source_text)
-    return {"summary": summary}
+    try:
+        summary = await summarize_with_gigachat(source_text)
+        return SummarizeResponse(summary=summary)
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка суммаризации: {e}")
 
 
-@app.post("/summarize_text")
-async def summarize_text(text: str = Body(..., embed=True)):
-    if not text:
-        raise HTTPException(400, "No text provided")
-    summary = await summarize_with_gigachat(text)
-    return {"summary": summary}
+@app.post("/summarize_text", response_model=SummarizeResponse)
+async def summarize_text(payload: SummarizeTextRequest):
+    """Суммаризация переданного текста."""
+    try:
+        summary = await summarize_with_gigachat(payload.text)
+        return SummarizeResponse(summary=summary)
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка суммаризации: {e}")
 
 
-@app.get("/status/{task_id}")
+@app.get("/status/{task_id}", response_model=StatusResponse)
 async def get_status(task_id: str):
-    """
-    Получение статуса по запросу на оценку
-    :param task_id: номер запроса на оценку
-    :return:
-    """
+    """Получение статуса по запросу на оценку."""
     if task_id not in tasks:
         raise HTTPException(404, "Task not found")
-    return tasks[task_id]
+    return StatusResponse(**tasks[task_id])
 
 
 async def run_evaluation_task(task_id: str, source: str, summary: str):
-    """
-    Запуск оценки суммаризвции ЭМК c отслеживанием прогресса
-    :param task_id: номер запроса на оценку
-    :param source: ЭМК
-    :param summary: Суммаризация ЭМК
-    :return:
-    """
+    """Фоновый запуск оценки суммаризации ЭМК."""
     try:
         result = await evaluate_with_gigachat(source, summary)
         tasks[task_id]["result"] = result

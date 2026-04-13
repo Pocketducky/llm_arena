@@ -1,5 +1,5 @@
 from app.core.prompts import PROMPT_EXTRACT_FACTS, PROMPT_COVERAGE, PROMPT_ERRORS
-from app.core.utils import split_source, _calc_coverage_score
+from app.core.utils import _calc_coverage_score
 from app.giga_core.giga_response import ask_gigachat
 
 
@@ -40,21 +40,25 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
     )
     coverage = await ask_gigachat(coverage_prompt, "Соответствие ЭМК/суммаризации", temperature=0.0)
 
-    errors_prompts = PROMPT_ERRORS.format(
-        source_short = source,
-        summary = summary
+    # Для поиска ошибок берём только первые 6000 символов ЭМК,
+    # чтобы экономить токены — ошибки обычно в клинической части
+    source_short = source[:6000]
+    if len(source) > 6000:
+        source_short += "\n[... текст обрезан ...]"
+
+    errors_prompt = PROMPT_ERRORS.format(
+        source_short=source_short,
+        summary=summary,
     )
-    errors = await ask_gigachat(errors_prompts, "Штрафы", temperature=0.0)
+    errors = await ask_gigachat(errors_prompt, "Штрафы", temperature=0.0)
 
     # Считаем баллы в коде
     MAXES = {"complaints": 15, "disease_history": 15, "comorbidities": 20,
              "habits": 5, "labs": 20, "imaging": 25}
     scores = {cat: _calc_coverage_score(coverage.get(cat, {}), mx)
               for cat, mx in MAXES.items()}
-    print(f"{"="*50}\n{scores}\n{"="*50}")
 
     pen = float(errors.get("penalties", 0))
-    print(f"{"="*50}\n{pen}\n{"="*50}")
 
     # iodine: только если аллергия реально есть в ЭМК
     iodine_in_source = bool(facts.get("iodine_allergy_in_source", False))
@@ -66,7 +70,7 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
                       and bool(errors.get("iodine_missing", False)))
 
     positive = sum(scores.values())
-    final_score = max(0.0, min(100.0, round(positive - pen if pen > 0 else positive + pen, 1)))
+    final_score = max(0.0, min(100.0, round(positive - abs(pen), 1)))
 
     return {
         **scores,
@@ -77,6 +81,9 @@ async def score_gigachat_r1(source: str, summary: str) -> dict:
         "safety_reason": str(errors.get("safety_reason", "")),
         "hallucinations": list(errors.get("hallucinations", [])),
         "wrong_values": list(errors.get("wrong_values", [])),
+        "irrelevant": list(errors.get("irrelevant", [])),
+        "iodine_missing": bool(errors.get("iodine_missing", False)),
+        "wrong_focus": bool(errors.get("wrong_focus", False)),
         "coverage_detail": {cat: {
             "covered": coverage.get(cat, {}).get("covered", []),
             "missing": coverage.get(cat, {}).get("missing", []),

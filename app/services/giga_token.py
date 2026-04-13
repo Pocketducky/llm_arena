@@ -4,7 +4,11 @@ import requests
 import logging
 import os
 from dotenv import load_dotenv
+
+# Пытаемся загрузить .env из директории services, затем из корня проекта
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+if not os.path.exists(dotenv_path):
+    dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path)
 
@@ -12,10 +16,18 @@ if os.path.exists(dotenv_path):
 _GIGA_TOKEN_CACHE = None
 _GIGA_TOKEN_EXPIRY_TIME = 0
 _GIGA_TOKEN_LIFETIME = 1800  # 30 минут в секундах
-_giga_key = os.getenv("GIGA_KEY")
 
-def get_giga_token(credentials=_giga_key, scope='GIGACHAT_API_PERS'):
-    """Функция для получения токена GigaChat с кэшированием на 30 минут"""
+
+def _get_credentials() -> str:
+    """Получает GIGA_KEY из env при каждом вызове, а не при загрузке модуля."""
+    key = os.getenv("GIGA_KEY")
+    if not key:
+        raise ValueError("Переменная окружения GIGA_KEY не установлена")
+    return key
+
+
+def get_giga_token(scope: str = 'GIGACHAT_API_PERS') -> str:
+    """Функция для получения токена GigaChat с кэшированием на 30 минут."""
     global _GIGA_TOKEN_CACHE, _GIGA_TOKEN_EXPIRY_TIME
 
     current_time = time.time()
@@ -26,6 +38,7 @@ def get_giga_token(credentials=_giga_key, scope='GIGACHAT_API_PERS'):
 
     logging.debug("Токен отсутствует или истек. Запрашиваем новый...")
 
+    credentials = _get_credentials()
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     payload = {
         'scope': scope
@@ -66,8 +79,8 @@ def get_giga_token(credentials=_giga_key, scope='GIGACHAT_API_PERS'):
         raise
 
 
-def refresh_giga_token(credentials=_giga_key, scope='GIGACHAT_API_PERS'):
-    """Принудительное обновление токена, игнорируя кэш"""
+def refresh_giga_token(scope: str = 'GIGACHAT_API_PERS') -> str:
+    """Принудительное обновление токена, игнорируя кэш."""
     global _GIGA_TOKEN_CACHE, _GIGA_TOKEN_EXPIRY_TIME
 
     # Сбрасываем кэш
@@ -75,7 +88,7 @@ def refresh_giga_token(credentials=_giga_key, scope='GIGACHAT_API_PERS'):
     _GIGA_TOKEN_EXPIRY_TIME = 0
 
     # Получаем новый токен
-    return get_giga_token(credentials, scope)
+    return get_giga_token(scope)
 
 
 def get_giga_token_status():

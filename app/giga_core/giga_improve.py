@@ -3,7 +3,11 @@ from app.giga_core.giga_response import ask_gigachat
 
 
 async def improve_summarization_gigachat(source: str, summary: str, score_1: dict, score_2: dict, score_3: dict) -> str:
+    """
+    Улучшение суммаризации на основе оценок R1.
 
+    :raises ValueError: если GigaChat не вернул поле improved_summary
+    """
     improvement_prompt = IMPROVED_SUMMARIZATION.format(
         source_text=source, summary=summary,
         peer_1=score_1, peer_2=score_2, peer_3=score_3,
@@ -11,5 +15,10 @@ async def improve_summarization_gigachat(source: str, summary: str, score_1: dic
 
     response = await ask_gigachat(improvement_prompt, "Улучшение суммаризации")
     improved_summary = response.get("improved_summary")
+
+    if not improved_summary or not isinstance(improved_summary, str):
+        raise ValueError(
+            f"GigaChat не вернул улучшённую суммаризацию. Ответ: {response}"
+        )
 
     return improved_summary
