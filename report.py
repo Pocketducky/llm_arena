@@ -2,7 +2,7 @@
 report.py — Блок 5 (продолжение): формирование Excel-отчёта под новую модель
 данных — раздельные оси таксономии A-E + детерминированная категория из
 aggregator.py, вместо единого `final_score`/`criteria`/`quality`
-(старая структура — evaluator.save_results, evaluator.py:929-1086).
+(старая структура — `save_results` прежней монолитной версии).
 
 Сохранена удобная структура листов прежнего отчёта (сводная/детали/
 статистика/критические ошибки), но содержание каждого подчинено новой
@@ -175,12 +175,15 @@ def _objective_cell_text(objective: Optional[dict]) -> str:
 
 def _objective_has_findings(objective: Optional[dict]) -> bool:
     """«Жёсткие» автоматические находки — то, что обязано бросаться в глаза
-    рядом с оценкой судей (числовые/полярные расхождения, см. Блок 2)."""
+    рядом с оценкой судей (числовые/полярные расхождения, введённая ложная
+    причинность — см. Блок 2)."""
     if not objective:
         return False
     num = objective.get("numeric") or {}
     pol = objective.get("polarity") or {}
-    return bool(num.get("mismatch_count") or num.get("unit_mismatch_count") or pol.get("flip_count"))
+    cau = objective.get("causality") or {}
+    return bool(num.get("mismatch_count") or num.get("unit_mismatch_count")
+                or pol.get("flip_count") or cau.get("introduced"))
 
 
 # ══════════════════════════════════════════════════════════════════

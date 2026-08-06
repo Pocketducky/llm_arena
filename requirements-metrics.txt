@@ -1,0 +1,7 @@
+# Опциональные зависимости для reference-метрики BERTScore (synthetic.py --ref-metrics).
+# Тянут torch + transformers (тяжёлые) и скачивают многоязычную модель BERT при
+# первом запуске. В ОСНОВНОЙ requirements.txt НЕ входят: продуктивный путь оценки
+# (исходник ЭМК -> суммаризация) эталона не имеет и BERTScore не использует.
+# Установка:  pip install -r requirements-metrics.txt
+# ROUGE-L зависимостей не требует и работает без этого файла.
+bert-score

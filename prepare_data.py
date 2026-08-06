@@ -7,7 +7,6 @@
   - text1_model1.txt ... text1_model6.txt → суммаризации
 """
 
-import os
 import re
 from pathlib import Path
 

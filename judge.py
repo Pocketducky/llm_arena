@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -177,6 +177,14 @@ def _ground_block_a(report: objective_layer.ObjectiveComparisonReport) -> str:
         for fl in pol["flips"][:20]:
             lines.append(f"  • «{fl.fact_a.raw}» -> «{fl.fact_b.raw}» "
                          f"(контекст источника: …{fl.fact_a.context[-50:]})")
+    interp = report.interpretation
+    if interp and interp.get("count"):
+        lines.append("Ложная интерпретация числовых значений (приписана оценка, "
+                     "ПРОТИВОРЕЧАЩАЯ референсному диапазону — это галлюцинация A1/A2, "
+                     "а при клинической значимости и E1):")
+        for c in interp["contradictions"][:15]:
+            lines.append(f"  • «{c['fragment']}»: оценка «{c['claimed']}» "
+                         f"при истинной норме «{c['true']}»")
     if report.entities:
         for cat, rep in report.entities.items():
             if rep.get("extra_in_b"):
@@ -395,21 +403,38 @@ class JudgeContext:
     source_struct: preprocessor.DocumentStructure
     summary_struct: preprocessor.DocumentStructure
     obj_report: objective_layer.ObjectiveComparisonReport
-    gate_decision: gate.GateDecision
+    gate_decision: Optional[gate.GateDecision]
     schema: dict
+    grounded: bool = True   # False -> режим «только LLM-судьи», без Блоков 1-3
 
 
 def build_context(source_text: str, summary_text: str, *,
                   scope: Optional[str] = None, panel=None,
                   entity_role: str = "judge_1",
-                  gate_decision: Optional["gate.GateDecision"] = None) -> JudgeContext:
+                  gate_decision: Optional["gate.GateDecision"] = None,
+                  grounded: bool = True) -> JudgeContext:
     """Считает один раз всё, что Блоки 1-3 могут сказать об этой паре —
     промпты блоков A-E ниже лишь форматируют эти готовые находки.
 
     `gate_decision` можно передать готовым (его уже в любом случае нужно
     посчитать в `evaluate_summary` ДО `obj_report`, чтобы шлюз реально
     экономил GPU-время на отклонённых парах, см. комментарий там) —
-    тогда здесь он не пересчитывается повторно."""
+    тогда здесь он не пересчитывается повторно.
+
+    `grounded=False` — режим «только LLM-судьи» (по решению НПКЦ): Блоки 1-3
+    (препроцессор, объективный слой, шлюз) НЕ запускаются; судьи получают лишь
+    сырой источник + суммаризацию + таксономию, а заземляющие поля промптов
+    заполняются нейтральными пометками (см. `_prompt_for_block`). Это изолирует
+    «чистую» способность LLM-контура судить, без подсказок автоматики."""
+    if not grounded:
+        empty_struct = preprocessor.DocumentStructure(raw_text=source_text)
+        return JudgeContext(
+            source_text=source_text, summary_text=summary_text, scope=scope,
+            source_struct=empty_struct,
+            summary_struct=preprocessor.DocumentStructure(raw_text=summary_text),
+            obj_report=objective_layer.empty_report(), gate_decision=None,
+            schema={}, grounded=False,
+        )
     source_struct = preprocessor.segment_emr(source_text)
     summary_struct = preprocessor.segment_summary(summary_text)
     obj_report = objective_layer.compare_texts(source_text, summary_text,
@@ -422,7 +447,29 @@ def build_context(source_text: str, summary_text: str, *,
         source_text=source_text, summary_text=summary_text, scope=scope,
         source_struct=source_struct, summary_struct=summary_struct,
         obj_report=obj_report, gate_decision=gate_decision, schema=schema,
+        grounded=True,
     )
+
+
+# ── Нейтральные заземления для режима «только LLM-судьи» (grounded=False) ──
+# Блоки 1-3 не запускались, поэтому вместо конкретных находок автоматики судья
+# получает честную пометку «сверка не проводилась — проверь сам» и СЫРОЙ источник.
+_UNGROUNDED_A = ("Автоматическая фактологическая сверка НЕ проводилась (режим оценки "
+                 "только силами LLM-судей). Сверь факты суммаризации с исходной ЭМК "
+                 "самостоятельно — числа, дозы, диагнозы, отрицания.")
+_UNGROUNDED_D = ("Автоматический структурный анализ НЕ проводился (режим только LLM). "
+                 "Оцени наличие и порядок пяти разделов схемы по самому тексту "
+                 "суммаризации.")
+_UNGROUNDED_E_HARD = ("Автоматическая сверка жёстких расхождений НЕ проводилась (режим "
+                      "только LLM) — выяви клинически опасные ошибки самостоятельно, "
+                      "сверяясь с исходной ЭМК.")
+_UNGROUNDED_E_GATE = "не применялся (режим оценки только силами LLM-судей)"
+
+
+def _ungrounded_source_sections(source_text: str) -> str:
+    return ("Автоматическая сегментация НЕ проводилась (режим только LLM). Ниже — "
+            "ПОЛНЫЙ исходный текст ЭМК; оцени покрытие пяти разделов по нему "
+            "самостоятельно:\n\n" + _truncate(source_text, 7000))
 
 
 def _prompt_for_block(block: str, ctx: JudgeContext) -> str:
@@ -430,18 +477,24 @@ def _prompt_for_block(block: str, ctx: JudgeContext) -> str:
                   summary=ctx.summary_text,
                   **{c: SUBCRITERIA_LABELS_RU[c] for c in TAXONOMY[block]})
     if block == "A":
+        grounding = _ground_block_a(ctx.obj_report) if ctx.grounded else _UNGROUNDED_A
         return _PROMPT_TEMPLATES["A"].format(
             **common, source_excerpt=_truncate(ctx.source_text, 7000),
-            grounding=_ground_block_a(ctx.obj_report))
+            grounding=grounding)
     if block == "B":
-        return _PROMPT_TEMPLATES["B"].format(
-            **common, source_sections=_ground_block_b(ctx.source_struct))
+        sections = (_ground_block_b(ctx.source_struct) if ctx.grounded
+                    else _ungrounded_source_sections(ctx.source_text))
+        return _PROMPT_TEMPLATES["B"].format(**common, source_sections=sections)
     if block == "C":
         return _PROMPT_TEMPLATES["C"].format(**common)
     if block == "D":
-        return _PROMPT_TEMPLATES["D"].format(**common, schema_report=_ground_block_d(ctx.schema))
+        schema_report = _ground_block_d(ctx.schema) if ctx.grounded else _UNGROUNDED_D
+        return _PROMPT_TEMPLATES["D"].format(**common, schema_report=schema_report)
     if block == "E":
-        hard, gate_summary = _ground_block_e(ctx.obj_report, ctx.gate_decision)
+        if ctx.grounded:
+            hard, gate_summary = _ground_block_e(ctx.obj_report, ctx.gate_decision)
+        else:
+            hard, gate_summary = _UNGROUNDED_E_HARD, _UNGROUNDED_E_GATE
         return _PROMPT_TEMPLATES["E"].format(
             **common, source_excerpt=_truncate(ctx.source_text, 7000),
             hard_findings=hard, gate_summary=gate_summary)
@@ -506,14 +559,49 @@ def _fallback_block_prompt(block: str, summary_text: str):
     return _fallback
 
 
+PARSE_ERROR_KEY = "_parse_error"
+
+
+def _sentinel_block(block: str, reason: str) -> dict:
+    """Блок-заглушка при НЕустранимом сбое JSON у ОДНОГО блока.
+
+    Ключевое: подкритерии помечены `pass=None` (НЕ False) — это «нет данных»,
+    а не «нарушено». Так один битый блок НЕ обнуляет оценки судьи: остальные
+    четыре блока сохраняют реальные значения, а этот честно помечен как сбой
+    (`_parse_error`) — агрегатор и отчёт показывают его отдельно («н/д»), а не
+    как фальшивый «0/N». Это и есть устранение бага «неверный JSON → оценки
+    обнулялись»."""
+    out: dict = {PARSE_ERROR_KEY: True, "_parse_error_reason": reason[:200]}
+    for c in TAXONOMY[block]:
+        out[c] = {"pass": None, "comment": f"нет данных: сбой JSON ({reason[:80]})"}
+    return out
+
+
 def score_block(panel: JudgePanel, role: str, block: str, ctx: JudgeContext) -> dict:
-    """Один запрос — оценка суммаризации по подкритериям ОДНОГО блока."""
+    """Один запрос — оценка суммаризации по подкритериям ОДНОГО блока.
+
+    НИКОГДА не пробрасывает OllamaError наверх: при неустранимом сбое JSON
+    (исчерпаны все попытки, не спас даже салваж в ollama_client.extract_json)
+    возвращает `_sentinel_block` — «нет данных» по этому блоку, не трогая
+    остальные. Раньше исключение прерывало score_round1 и терялся ВЕСЬ отчёт
+    судьи (все 5 блоков) — это и был баг «оценки обнулялись».
+
+    think=False — критично для надёжности JSON у «мыслящих» моделей (qwen3 и
+    т.п.): со включённым по умолчанию <think> скрытые рассуждения съедают бюджет
+    num_predict ДО структурированного ответа, и JSON обрывается. num_predict
+    поднят (1536) и max_attempts=4 — чтобы до sentinel доходило как можно реже."""
     prompt = _prompt_for_block(block, ctx)
-    return panel.ask_json(
-        role, prompt, desc=f"R1 блок {block} ({BLOCK_TITLES_RU[block]})",
-        max_attempts=3, validate_fn=_validate_block(block),
-        fallback_prompt_fn=_fallback_block_prompt(block, ctx.summary_text),
-    )
+    try:
+        return panel.ask_json(
+            role, prompt, desc=f"R1 блок {block} ({BLOCK_TITLES_RU[block]})",
+            max_attempts=4, validate_fn=_validate_block(block), think=False,
+            num_predict=1536,
+            fallback_prompt_fn=_fallback_block_prompt(block, ctx.summary_text),
+        )
+    except OllamaError as e:
+        log.error("    %s блок %s: JSON не получен после всех попыток (%s) — блок "
+                  "помечен «нет данных», остальные блоки судьи сохраняются", role, block, e)
+        return _sentinel_block(block, str(e))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -522,10 +610,20 @@ def score_block(panel: JudgePanel, role: str, block: str, ctx: JudgeContext) -> 
 
 def score_round1(panel: JudgePanel, role: str, ctx: JudgeContext) -> dict[str, dict]:
     """Возвращает {"A": {...}, "B": {...}, ..., "E": {...}} — полный
-    структурированный отчёт судьи по всем пяти блокам таксономии."""
+    структурированный отчёт судьи по всем пяти блокам таксономии.
+
+    Пер-блочная изоляция: сбой ОДНОГО блока (даже непредвиденное исключение)
+    НЕ рушит весь отчёт — проваленный блок заменяется на `_sentinel_block`,
+    остальные сохраняют реальные оценки. score_round1 НИКОГДА не поднимает
+    исключение (гарантия против «обнуления» всего судьи из-за одного блока)."""
     report: dict[str, dict] = {}
     for block in ("A", "B", "C", "D", "E"):
-        report[block] = score_block(panel, role, block, ctx)
+        try:
+            report[block] = score_block(panel, role, block, ctx)
+        except Exception as e:  # noqa: BLE001 — один блок не должен рушить судью
+            log.error("    %s блок %s: непредвиденная ошибка (%s) — sentinel",
+                      role, block, e)
+            report[block] = _sentinel_block(block, f"{type(e).__name__}: {e}")
     return report
 
 
@@ -584,29 +682,44 @@ _PROMPT_CROSS_REVIEW = """{role_intro}
 {schema_skeleton}"""
 
 
-def _validate_full_report(parsed: dict, raw: str) -> None:
+def _merge_full_report(revised: dict, baseline: dict) -> dict:
+    """
+    Накладывает ревизию раунда 2 на ВАЛИДНЫЙ отчёт раунда 1. Для каждого
+    подкритерия берём значение из ревизии, ТОЛЬКО если оно корректно (объект с
+    булевым `pass`); иначе сохраняем значение из R1. Доп. списки (hallucinations,
+    wrong_values, missing, …) переносим из ревизии, если они есть.
+
+    Зачем мердж вместо «всё-или-ничего» валидации: R2 просит модель переиздать
+    ВЕСЬ вложенный отчёт A-E — большой JSON, который слабые модели регулярно
+    обрывают (один пропущенный `pass` раньше отвергал весь ответ → 3 провальные
+    попытки → откат к R1). Здесь обрыв/пропуск поля больше не фатален: гаранти-
+    рованно получаем валидный полный отчёт (худший случай — равен R1), а реально
+    пересмотренные подкритерии аккуратно вносятся.
+    """
+    merged: dict[str, dict] = {}
     for block, subcriteria in TAXONOMY.items():
-        block_report = parsed.get(block)
-        if not isinstance(block_report, dict):
-            raise ValueError(f"полный отчёт: отсутствует блок {block}")
+        base_block = baseline.get(block) if isinstance(baseline.get(block), dict) else {}
+        rev_block = revised.get(block) if isinstance(revised.get(block), dict) else {}
+        out_block = dict(base_block)
         for c in subcriteria:
-            sub = block_report.get(c)
-            if not isinstance(sub, dict) or not isinstance(sub.get("pass"), bool):
-                raise ValueError(f"полный отчёт: {block}.{c} — нет валидного pass")
-
-
-def _fallback_full_report_prompt(summary_text: str, my_report: dict):
-    def _fallback(attempt: int, last_raw: str) -> str:
-        return (f"Заполни ПОЛНУЮ JSON-структуру пересмотренного отчёта по блокам A-E "
-                f"(каждый подкритерий — pass true/false + comment). Если не уверен — "
-                f"повтори свою оценку из раунда 1:\n{_format_full_report(my_report)}\n\n"
-                f"Суммаризация:\n{_truncate(summary_text, 1500)}\n\n"
-                f"Верни ТОЛЬКО JSON по структуре:\n{_FULL_REPORT_SKELETON}")
-    return _fallback
+            rc = rev_block.get(c)
+            if isinstance(rc, dict) and isinstance(rc.get("pass"), bool):
+                out_block[c] = rc
+        for key, val in rev_block.items():
+            if key not in subcriteria and val is not None:
+                out_block[key] = val
+        merged[block] = out_block
+    return merged
 
 
 def score_round2(panel: JudgePanel, role: str, ctx: JudgeContext,
                  my_report: dict, peer_reports: list[dict]) -> dict:
+    """Раунд 2 (cross-peer-review). НИКОГДА не падает: ответ модели накладывается
+    мерджем на валидный отчёт R1 (см. `_merge_full_report`), а полностью
+    непарсимый ответ -> отчёт R1 без изменений (легитимная ревизия «после ревью
+    согласен с собой»). think=False + увеличенный num_predict устраняют обрыв
+    большого JSON у «мыслящих» моделей (бюджет идёт на отчёт, не на скрытый
+    <think>)."""
     prompt = _PROMPT_CROSS_REVIEW.format(
         role_intro=_role_intro(ctx.scope),
         summary=ctx.summary_text,
@@ -615,18 +728,23 @@ def score_round2(panel: JudgePanel, role: str, ctx: JudgeContext,
         peer_2=_format_full_report(peer_reports[1]),
         schema_skeleton=_FULL_REPORT_SKELETON,
     )
-    return panel.ask_json(
-        role, prompt, desc="R2 пересмотр (полные отчёты коллег)",
-        max_attempts=3, validate_fn=_validate_full_report,
-        fallback_prompt_fn=_fallback_full_report_prompt(ctx.summary_text, my_report),
-    )
+    try:
+        revised = panel.ask_json(
+            role, prompt, desc="R2 пересмотр (полные отчёты коллег)",
+            max_attempts=2, validate_fn=None, think=False, num_predict=2048,
+        )
+    except OllamaError as e:
+        log.warning("      %s R2: модель не вернула парсимый JSON (%.80s) — "
+                    "оставляю отчёт R1 без изменений", role, str(e))
+        return my_report
+    return _merge_full_report(revised, my_report)
 
 
 # ══════════════════════════════════════════════════════════════════
 # РАУНД 3 — финальная агрегация с ЯВНОЙ, НЕ-ОПЦИОНАЛЬНОЙ проверкой E1
 #
 # В старом коде safety_flag собирался, но НЕ переопределял quality
-# (evaluator.py:827, баг из плана п.2) — суммаризация с опасной
+# (баг прежней монолитной версии, п.2 плана) — суммаризация с опасной
 # галлюцинацией могла получить «отличное». Здесь агрегатору explicитно,
 # пошагово предписано: сначала проверь E1 по всем шести отчётам, и
 # ТОЛЬКО ЕСЛИ он не сработал — выводи категорию по совокупности баллов.
@@ -730,7 +848,7 @@ def score_round3(panel: JudgePanel, role: str, ctx: JudgeContext,
     )
     return panel.ask_json(
         role, prompt, desc="R3 финальная агрегация (явная проверка E1)",
-        max_attempts=3, validate_fn=_validate_aggregate,
+        max_attempts=3, validate_fn=_validate_aggregate, think=False, num_predict=1536,
         fallback_prompt_fn=_fallback_aggregate_prompt(ctx.summary_text),
     )
 
@@ -812,6 +930,7 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
                  gate_decision.reason_codes())
         return {
             "emr_id": emr_id, "model_id": model_id,
+            "scope": scope,
             "category": "Неприемлемо",
             "verdict": "Отклонена pre-evaluation gate (Блок 3) до основной "
                        f"оценки: {', '.join(gate_decision.reason_codes())}",
@@ -893,6 +1012,7 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
 
     return {
         "emr_id": emr_id, "model_id": model_id,
+        "scope": scope,
         "category": r3.get("category", "—"),
         "verdict": r3.get("verdict", ""),
         "summary_by_block": r3.get("summary_by_block", {}),

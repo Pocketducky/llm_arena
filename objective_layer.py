@@ -38,7 +38,8 @@ objective_layer.py — объективный слой: извлечение п�
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Optional
 
 # ══════════════════════════════════════════════════════════════════
@@ -170,6 +171,10 @@ _POLARITY_PREDICATES: list[str] = [
     r"определя(?:ется|ются|лось)",
     r"диагностирован\w*",
     r"эффект\w*",
+    # статус госпитализации — клинически значимая полярность: «не госпитализирован»,
+    # «не поступал» переворачивает смысл. Общий предикат (не подгонка под тест).
+    r"госпитализир\w*",
+    r"поступил\w*",
 ]
 
 _PREDICATE_RE = re.compile(
@@ -183,8 +188,22 @@ _PREDICATE_RE = re.compile(
 # сравнение увидит несовпадение полюсов как и в случае с «не +предикат».
 _ANTONYM_PAIRS: list[tuple[str, str, str]] = [
     # (нормализованное_имя_предиката, regex_положительный_полюс, regex_отрицательный_полюс)
+    #
+    # АНТИ-ОВЕРФИТ: ниже — только КЛИНИЧЕСКИ-ОБЩИЕ инверсии состояния, которые
+    # обязан знать любой медицинский NLP (госпитализация↔выписка, тест +/−,
+    # купирование↔провокация, нарастание↔регресс, подтверждение↔исключение).
+    # Это НЕ подгонка под конкретные слова синтетического теста: открытые
+    # семантические подмены (диагноз↔диагноз, отделение↔отделение, редкие
+    # антонимы вроде «потеря↔прибавка») сознательно отданы LLM-слою
+    # (compare_entity_sets), а не захардкожены сюда — иначе recall на наборе
+    # становится фикцией. См. synthetic.py (режим A: «rule-based + LLM»).
     ("включение",  r"включ\w*",   r"исключ\w*"),
     ("норма",      r"в\s?норме|без\s?патологи\w*|не\s?изменен\w*", r"патологи\w*|изменен\w*(?!\s?не)"),
+    ("госпитализация", r"госпитализир\w*|поступил\w*",  r"выписан\w*|выписал\w*"),
+    ("результат_теста", r"отрицательн\w*",              r"положительн\w*"),
+    ("купирование",    r"купир\w*",                     r"спровоцир\w*|усугуб\w*"),
+    ("динамика",       r"нараст\w*|усилива\w*|усилен\w*|прогрессир\w*", r"регресс\w*|ослаблен\w*|ослабева\w*|стиха\w*"),
+    ("подтверждение",  r"подтвержд\w*|демонстрир\w*",   r"опроверг\w*|отрица\w*"),
 ]
 
 _ANTONYM_RE = re.compile(
@@ -261,6 +280,10 @@ _ENTITY_EXTRACTION_PROMPT = """\
   medications  — лекарственные препараты
   procedures   — процедуры, операции, исследования (КТ, УЗИ, операции и т.п.)
   departments  — отделения, специализации врачей, локализации в организме
+  symptoms     — жалобы и симптомы (боль, слабость, одышка, кашель, тошнота,
+                 головокружение, потливость и т.п.)
+  anamnesis    — значимые факты анамнеза жизни: наследственность, вредные
+                 привычки (курение, алкоголь), аллергии, перенесённые травмы
 
 Текст:
 \"\"\"
@@ -268,11 +291,24 @@ _ENTITY_EXTRACTION_PROMPT = """\
 \"\"\"
 
 Ответь СТРОГО в формате JSON:
-{{"diagnoses": ["..."], "medications": ["..."], "procedures": ["..."], "departments": ["..."]}}
+{{"diagnoses": ["..."], "medications": ["..."], "procedures": ["..."],
+  "departments": ["..."], "symptoms": ["..."], "anamnesis": ["..."]}}
 Если категория не встречается — пустой список.
 """
 
-ENTITY_CATEGORIES = ("diagnoses", "medications", "procedures", "departments")
+ENTITY_CATEGORIES = ("diagnoses", "medications", "procedures", "departments",
+                     "symptoms", "anamnesis")
+
+# Внутрипроцессный кэш извлечения сущностей: идентичный текст+роль -> тот же
+# результат. Безопасно (детерминирует повторные вызовы на одинаковом тексте) и
+# критично для валидации на синтетике, где ОДИН эталон сравнивается с десятками
+# искажённых строк — без кэша эталон переизвлекался бы сотни раз. В проде тексты
+# уникальны, кэш почти не срабатывает. Очистка — clear_entity_cache().
+_ENTITY_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
+
+
+def clear_entity_cache() -> None:
+    _ENTITY_CACHE.clear()
 
 
 def extract_semantic_entities(panel, text: str, role: str = "judge_1",
@@ -282,8 +318,14 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
     panel=None — функция не вызывается (обёртки выше должны проверять сами).
 
     Намеренно тонкий слой над `panel.ask_json`: вся специфика — в промпте
-    и схеме, retry/JSON-восстановление остаются в ollama_client.
+    и схеме, retry/JSON-восстановление остаются в ollama_client. Результат
+    кэшируется по (роль, текст) на время процесса (см. _ENTITY_CACHE).
     """
+    cache_key = (role, text[:6000])
+    cached = _ENTITY_CACHE.get(cache_key)
+    if cached is not None:
+        return {cat: list(v) for cat, v in cached.items()}
+
     def _validate(parsed: dict, _raw: str) -> None:
         if not any(parsed.get(cat) for cat in ENTITY_CATEGORIES):
             # Пустой результат подозрителен для содержательного мед. текста —
@@ -295,51 +337,198 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
         role,
         _ENTITY_EXTRACTION_PROMPT.format(text=text[:6000]),
         desc=desc, validate_fn=_validate, max_attempts=2,
+        # think=False — критично для «мыслящих» моделей семейства qwen3:
+        # диагностировано прямым вызовом Ollama (тот же промпт), что при их
+        # поведении по умолчанию (think включён даже с format="json") скрытые
+        # рассуждения <think>...</think> съедают весь бюджет num_predict ДО
+        # самого JSON-ответа — итог обрывается без закрывающей скобки или
+        # оказывается пустым (см. подробности в ollama_client.generate).
+        # Здесь — чисто экстрактивная задача без нужды в рассуждениях:
+        # явное отключение чинит обрыв И ускоряет вызов (тот же промпт с
+        # think=False уложился в 592 из 1024 токенов, done_reason="stop").
+        think=False,
     )
-    return {cat: [str(x).strip() for x in result.get(cat, []) if str(x).strip()]
-            for cat in ENTITY_CATEGORIES}
+    out = {cat: [str(x).strip() for x in result.get(cat, []) if str(x).strip()]
+           for cat in ENTITY_CATEGORIES}
+    _ENTITY_CACHE[cache_key] = {cat: list(v) for cat, v in out.items()}
+    return out
 
 
 def _normalize_entity(name: str) -> str:
     return re.sub(r"\s+", " ", name.strip().lower()).strip(".,;:")
 
 
+# Порог посимвольной близости (SequenceMatcher.ratio) для признания двух
+# сущностей одной и той же. Подобран по реальной природе шума синтетического
+# набора: ДОЛЖЕН поглощать опечатки и словоформы
+#   «госпитализирована» vs «госпиталлизирована» ≈ 0.97
+#   «креатинфосфокиназа» vs «креатинфосфокиназы» ≈ 0.97
+# и НЕ ДОЛЖЕН склеивать реальные клинические подмены (иначе подмена_сущности
+# станет невидимой):
+#   «кардиореанимация» vs «нейрореанимация» ≈ 0.73
+#   «слабость» vs «головокружение» ≈ 0.17
+# 0.85 лежит в широком зазоре между этими двумя режимами.
+_ENTITY_FUZZY_THRESHOLD = 0.85
+
+
+def _entity_tokens(name: str) -> set[str]:
+    """Значимые токены сущности (>=3 символов) — для сопоставления по
+    подмножеству слов: «инфаркт» ⊂ «инфаркт миокарда», иной порядок слов."""
+    return {t for t in re.findall(r"[а-яёa-z0-9]+", name.lower()) if len(t) >= 3}
+
+
+def _entity_match(a: str, b: str) -> bool:
+    """
+    Две (уже нормализованные) сущности считаются одной и той же, если:
+      • строки совпадают;
+      • одна содержится в другой (аббревиатура и её расшифровка:
+        «кфк» ⊂ «кфк (креатинфосфокиназа)»);
+      • значимые токены одной — подмножество токенов другой (расширение
+        названия / иной порядок слов: «инфаркт» vs «инфаркт миокарда»);
+      • посимвольная близость ≥ порога (опечатки, морфологические варианты).
+
+    Это заменяет прежнее «точное равенство ИЛИ подстрока (len>3)», которое
+    штрафовало любую опечатку/словоформу как расхождение сущностей и было
+    главным источником ложных срабатываний LLM-слоя (benign FPR). Порог
+    `_ENTITY_FUZZY_THRESHOLD` намеренно оставляет реальные подмены различимыми.
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) > 3 and (a in b or b in a):
+        return True
+    ta, tb = _entity_tokens(a), _entity_tokens(b)
+    if ta and tb and (ta <= tb or tb <= ta):
+        return True
+    return SequenceMatcher(None, a, b, autojunk=False).ratio() >= _ENTITY_FUZZY_THRESHOLD
+
+
+def _stem_overlap(a: str, b: str) -> bool:
+    """Делят ли два слова общий стем достаточной длины — устойчивая к падежным
+    окончаниям замена точного совпадения. Порог адаптивен: для коротких слов
+    допускается лишь короткое расхождение в конце («боль»/«боли» — стем «бол»),
+    для длинных требуется длинный общий стем («одышка»/«одышку» — «одышк»),
+    что отсекает случайные совпадения начала разных слов («боль»/«белок»)."""
+    n = 0
+    for ca, cb in zip(a, b):
+        if ca != cb:
+            break
+        n += 1
+    return n >= max(3, min(len(a), len(b)) - 2)
+
+
+# Обрамляющие слова, которые LLM-экстрактор добавляет к сущности, но которых
+# нет в исходном тексте: лабораторный показатель «гемоглобин 115 г/л» извлекается
+# как «определение гемоглобина», «КФК общая 126 ед/л» — как «определение КФК
+# общая». Идентифицирует сущность ЯДРО («гемоглобин», «кфк»), а не рамка — по нему
+# и проверяем присутствие в тексте, иначе ложно теряем реально присутствующий факт.
+_ENTITY_FRAMING_WORDS = frozenset({
+    "определение", "тест", "анализ", "исследование", "проба", "уровень",
+    "содержание", "оценка", "измерение", "показатель", "показатели",
+    "общий", "общая", "общее", "на", "и", "в", "с", "по",
+})
+
+
+def _entity_present_in_text(entity_norm: str, text_norm: str) -> bool:
+    """
+    Содержательно присутствует ли сущность в СЫРОМ тексте (а не в списке,
+    извлечённом LLM): каждый её ЗНАЧИМЫЙ (не-обрамляющий) токен имеет в тексте
+    слово с общим стемом (см. _stem_overlap). Стем-сопоставление, а не точная
+    подстрока — LLM нормализует сущность к именительному падежу («одышка»), а в
+    тексте косвенный («одышку»). Обрамляющие слова (_ENTITY_FRAMING_WORDS)
+    игнорируются — экстрактор добавляет «определение/тест/общий», которых в тексте
+    нет. Все значимые токены обязаны присутствовать: реально отсутствующая
+    сущность (удалённая или выдуманная экстрактором) ядра в тексте не найдёт.
+    """
+    if not text_norm:
+        return False
+    text_tokens = re.findall(r"[а-яёa-z0-9]+", text_norm)
+    toks = re.findall(r"[а-яёa-z0-9]+", entity_norm)
+    significant = [t for t in toks if len(t) >= 3 and t not in _ENTITY_FRAMING_WORDS]
+    check = significant or [t for t in toks if len(t) >= 3] or toks
+    if not check:
+        return False
+    return all(any(_stem_overlap(t, tt) for tt in text_tokens) for t in check)
+
+
 def compare_entity_sets(entities_a: dict[str, list[str]],
-                        entities_b: dict[str, list[str]]) -> dict[str, dict]:
+                        entities_b: dict[str, list[str]],
+                        *, text_a: str = "", text_b: str = "") -> dict[str, dict]:
     """
     Precision/Recall/F1 по каждой категории сущностей: насколько B покрывает A
     (recall — «не упустили ли», precision — «не придумали ли лишнего»).
-    Сопоставление — по совпадению нормализованной формы ИЛИ вхождению одной
-    строки в другую (грубая, но устойчивая к небольшим расхождениям формулировок
-    эвристика; точное сопоставление сущностей — за пределами объективного слоя,
-    это работа NER-уровня, который здесь сознательно держим простым и прозрачным).
+
+    Сопоставление — через `_entity_match` (точное / подстрока / подмножество
+    токенов / посимвольная близость), УСТОЙЧИВОЕ к опечаткам, словоформам,
+    расшифровкам аббревиатур и перестановке слов. ОДНО правило применяется и
+    для подсчёта matched, и для вывода missing_in_b/extra_in_b (раньше это были
+    два слегка разных инлайновых правила — латентный источник рассогласования).
+
+    ФИЛЬТР АРТЕФАКТОВ ИЗВЛЕЧЕНИЯ (если переданы сырые text_a/text_b): LLM
+    извлекает сущности недетерминированно — один и тот же препарат может быть
+    извлечён из эталона, но пропущен при извлечении из кандидата, давая ФАНТОМНЫЙ
+    «пропуск» там, где сущность реально есть в тексте кандидата. Поэтому перед
+    выводом missing_in_b проверяем, действительно ли сущность ОТСУТСТВУЕТ в сыром
+    тексте B (а не только в списке B); симметрично extra_in_b (кандидат на
+    галлюцинацию) проверяется против сырого текста A. Это убирает доминирующий
+    остаточный шум (пунктуация/перестановка/пояснение «теряли» морфин из-за
+    сэмплинга), НЕ затрагивая настоящие пропуск_контента (удалённый текст реально
+    отсутствует) и галлюцинации (выдуманный факт реально не в источнике).
     """
     report = {}
+    text_a_norm = re.sub(r"\s+", " ", text_a.lower())
+    text_b_norm = re.sub(r"\s+", " ", text_b.lower())
     for cat in ENTITY_CATEGORIES:
-        set_a = [_normalize_entity(x) for x in entities_a.get(cat, [])]
-        set_b = [_normalize_entity(x) for x in entities_b.get(cat, [])]
+        raw_a, raw_b = entities_a.get(cat, []), entities_b.get(cat, [])
+        # SELF-GROUNDING: доверяем извлечённой сущности, ТОЛЬКО если она реально
+        # присутствует в СВОЁМ тексте. LLM-экстрактор регулярно «додумывает»
+        # типичные для контекста симптомы/показатели, которых в тексте нет
+        # (напр. «тошнота», «одышка» к кардиологическому случаю) — без этого
+        # фильтра такая выдумка появляется/исчезает между прогонами и даёт
+        # фантомные missing/extra. При отсутствии текста (text_*="" — вызов без
+        # сырого текста) фильтр не применяется. См. cross-text проверку ниже —
+        # она ловит обратный случай (сущность В тексте, но не извлечена).
+        if text_a_norm:
+            raw_a = [x for x in raw_a if _entity_present_in_text(_normalize_entity(x), text_a_norm)]
+        if text_b_norm:
+            raw_b = [x for x in raw_b if _entity_present_in_text(_normalize_entity(x), text_b_norm)]
+        norm_a = [_normalize_entity(x) for x in raw_a]
+        norm_b = [_normalize_entity(x) for x in raw_b]
 
-        matched_b = set()
-        for a in set_a:
-            for j, b in enumerate(set_b):
+        matched_a: set[int] = set()
+        matched_b: set[int] = set()
+        for i, a in enumerate(norm_a):
+            for j, b in enumerate(norm_b):
                 if j in matched_b:
                     continue
-                if a == b or (len(a) > 3 and (a in b or b in a)):
+                if _entity_match(a, b):
+                    matched_a.add(i)
                     matched_b.add(j)
                     break
 
-        tp = len(matched_b)
-        precision = tp / len(set_b) if set_b else (1.0 if not set_a else 0.0)
-        recall = tp / len(set_a) if set_a else 1.0
+        # Сущность A не нашла пары в списке B, но реально присутствует в ТЕКСТЕ B
+        # -> это промах извлечения, а не пропуск контента: считаем покрытой.
+        covered_a = set(matched_a)
+        for i in range(len(norm_a)):
+            if i not in covered_a and _entity_present_in_text(norm_a[i], text_b_norm):
+                covered_a.add(i)
+        # Сущность B без пары, но присутствует в ТЕКСТЕ A -> не галлюцинация.
+        real_extra_b = [j for j in range(len(norm_b))
+                        if j not in matched_b and not _entity_present_in_text(norm_b[j], text_a_norm)]
+
+        missing_in_b = [raw_a[i] for i in range(len(norm_a)) if i not in covered_a]
+        extra_in_b = [raw_b[j] for j in real_extra_b]
+
+        recall = (len(norm_a) - len(missing_in_b)) / len(norm_a) if norm_a else 1.0
+        precision = (len(norm_b) - len(extra_in_b)) / len(norm_b) if norm_b else (1.0 if not norm_a else 0.0)
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
         report[cat] = {
             "precision": round(precision, 3), "recall": round(recall, 3), "f1": round(f1, 3),
-            "in_a": len(set_a), "in_b": len(set_b), "matched": tp,
-            "missing_in_b": [entities_a[cat][i] for i, a in enumerate(set_a)
-                             if not any(a == set_b[j] or (len(a) > 3 and (a in set_b[j] or set_b[j] in a))
-                                        for j in range(len(set_b)))],
-            "extra_in_b": [entities_b[cat][j] for j in range(len(set_b)) if j not in matched_b],
+            "in_a": len(norm_a), "in_b": len(norm_b), "matched": len(matched_b),
+            "missing_in_b": missing_in_b,
+            "extra_in_b": extra_in_b,
         }
     return report
 
@@ -611,6 +800,133 @@ def compare_polarity_facts(facts_a: list[PolarityFact], facts_b: list[PolarityFa
 
 
 # ══════════════════════════════════════════════════════════════════
+# 4b. ЛОЖНАЯ ПРИЧИННОСТЬ (введение причинной связи, которой нет в источнике)
+# ══════════════════════════════════════════════════════════════════
+# Тип искажения «ложная_причинность»: нейтральное перечисление фактов в
+# источнике («…инфаркт миокарда И курение в анамнезе») превращается в
+# причинно-следственное утверждение («…инфаркт миокарда ВСЛЕДСТВИЕ курения»).
+# Ни числа, ни полярность, ни набор сущностей при этом не меняются — поэтому
+# остальные детекторы слепы к нему. Сигнал прост и устойчив: появление в
+# кандидате причинного союза/предлога, которого не было в референсе.
+#
+# Набор маркеров намеренно УЗКИЙ — только однозначно причинные связки. «На
+# фоне», «при», «после» исключены сознательно: они описывают временной/фоновый
+# контекст, а не причинность, и часто встречаются в нейтральных перефразах —
+# их включение давало бы ложные срабатывания на benign-строках.
+# «спровоцирован» сознательно НЕ включён: это полярная инверсия (пара
+# купирование↔провокация уже в _ANTONYM_PAIRS) — не вводит новой причинной
+# СВЯЗКИ между фактами, а переворачивает исход одного предиката. Дублировать
+# его здесь значило бы засчитывать один и тот же случай двум сигналам.
+_CAUSAL_CONNECTIVES_RE = re.compile(
+    r"вследствие|из-?за|по\s+причине|в\s+результате|благодаря|"
+    r"обусловлен\w*|привед\w*\s+к|стал\w*\s+причиной",
+    re.IGNORECASE,
+)
+
+
+def compare_causality(text_a: str, text_b: str) -> dict:
+    """
+    Сравнивает плотность причинных связок в референсе и кандидате. `introduced`
+    > 0 означает, что кандидат утверждает причинно-следственную связь, которой
+    в референсе не было — кандидат на тип «ложная_причинность».
+    """
+    a_hits = _CAUSAL_CONNECTIVES_RE.findall(text_a)
+    b_hits = _CAUSAL_CONNECTIVES_RE.findall(text_b)
+    return {
+        "in_a": len(a_hits),
+        "in_b": len(b_hits),
+        "introduced": max(0, len(b_hits) - len(a_hits)),
+        "introduced_markers": [re.sub(r"\s+", " ", m).strip()
+                               for m in b_hits][: max(0, len(b_hits) - len(a_hits))],
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
+# 4c. ЛОЖНАЯ ИНТЕРПРЕТАЦИЯ ЧИСЛОВОГО ЗНАЧЕНИЯ
+# ══════════════════════════════════════════════════════════════════
+# Тип «ложная_интерпретация»: к голому числу приписывается оценочное слово
+# («повышена», «снижено», «в норме»), ПРОТИВОРЕЧАЩЕЕ референсному диапазону —
+# «снижено (150/90 мм рт. ст.)» при систолическом 150 (это гипертензия, не
+# гипотензия). От BENIGN «интерпретация_норма» отличается ровно медицинской
+# ВЕРНОСТЬЮ: корректная оценка («гемоглобин 115 г/л снижен» — он реально низкий)
+# согласуется с диапазоном и НЕ флагается. Поэтому сигнал — не «вставлена
+# оценка», а «оценка ПРОТИВОРЕЧИТ значению»: так critical ложь отделяется от
+# benign корректной интерпретации, неотличимых по поверхности.
+#
+# Диапазоны намеренно КОНСЕРВАТИВНЫ и заданы лишь для ОДНОЗНАЧНЫХ по единице
+# величин (АД, ЧСС, гемоглобин, креатинин, явный избыток кардиоферментов).
+# Неоднозначные (ед/л 126 — КФК общая или МБ? ммоль/л — глюкоза/холестерин/
+# калий?) ПРОПУСКАЮТСЯ и остаются на LLM-судьях. Цель — высокая ТОЧНОСТЬ
+# сигнала (не раздуть benign FPR), а не полнота; полноту добирает режим B.
+
+_INTERP_POLARITY: list[tuple[str, str]] = [
+    ("low",    r"ниже\s+нормы|сниж\w*|пониж\w*|низк\w*|уменьш\w*"),
+    ("high",   r"выше\s+нормы|повыш\w*|увелич\w*|высок\w*"),
+    ("normal", r"в\s+норме|нормальн\w*"),
+]
+_INTERP_RE = re.compile(
+    "|".join(f"(?P<p{i}>{pat})" for i, (_pol, pat) in enumerate(_INTERP_POLARITY)),
+    re.IGNORECASE,
+)
+# Сразу после оценочного слова — значение (опц. «сис/диа») и опц. единица.
+_VALUE_AFTER_RE = re.compile(
+    r"^[\s\-—:;(]{0,6}(\d{1,4}(?:[.,]\d{1,3})?)(?:\s*/\s*(\d{1,3}))?"
+    r"\s*(мм\s?рт|ед/л|г/л|ммоль/л|мкмоль/л|в\s?минут\w*|уд[\w/]*|пг/мл)?",
+    re.IGNORECASE,
+)
+
+
+def _reference_polarity(primary: float, secondary: Optional[float], unit_norm: str) -> Optional[str]:
+    """Истинная полярность значения относительно референсной нормы — или None,
+    если по единице величина неоднозначна (тогда сигнал не выдаём)."""
+    u = unit_norm
+    if "ммрт" in u:                              # АД — только пара сис/диа однозначна
+        if secondary is None:
+            return None                          # одиночное «N мм рт ст» неоднозначно
+            #   (диастолическое? пульсовое давление? — пропускаем)
+        if primary >= 140 or secondary >= 90:    # систолическое — основной ориентир
+            return "high"
+        return "low" if primary < 90 else "normal"
+    if "минут" in u or u.startswith("уд"):       # ЧСС
+        return "low" if primary < 60 else ("high" if primary > 100 else "normal")
+    if u == "г/л" and 100 <= primary <= 200:     # гемоглобин (по диапазону значений)
+        return "low" if primary < 120 else ("high" if primary > 175 else "normal")
+    if "мкмоль" in u:                            # креатинин
+        return "low" if primary < 55 else ("high" if primary > 115 else "normal")
+    if u == "ед/л":                              # кардиоферменты — лишь явный избыток
+        return "high" if primary > 400 else None
+    return None
+
+
+def compare_interpretations(text_a: str, text_b: str) -> dict:
+    """
+    Ищет в кандидате оценочные слова при числах, ПРОТИВОРЕЧАЩИЕ референсному
+    диапазону (ложная интерпретация). Корректные оценки (benign
+    «интерпретация_норма») согласованы с диапазоном и не попадают сюда.
+    text_a не используется (контрадикция неверна независимо от референса; для
+    эталона-источника корректных интерпретаций нет) — параметр для единообразия.
+    """
+    contradictions: list[dict] = []
+    for m in _INTERP_RE.finditer(text_b):
+        claimed = next(_INTERP_POLARITY[i][0]
+                       for i in range(len(_INTERP_POLARITY)) if m.group(f"p{i}") is not None)
+        vm = _VALUE_AFTER_RE.match(text_b[m.end(): m.end() + 24])
+        if not vm:
+            continue
+        primary = float(vm.group(1).replace(",", "."))
+        secondary = float(vm.group(2)) if vm.group(2) else None
+        unit_norm = re.sub(r"\s+", "", (vm.group(3) or "").lower())
+        true_pol = _reference_polarity(primary, secondary, unit_norm)
+        if true_pol is None or claimed == true_pol:
+            continue
+        contradictions.append({
+            "claimed": claimed, "true": true_pol,
+            "fragment": re.sub(r"\s+", " ", (m.group(0) + " " + vm.group(0)).strip())[:48],
+        })
+    return {"contradictions": contradictions, "count": len(contradictions)}
+
+
+# ══════════════════════════════════════════════════════════════════
 # 5. ОБЪЕДИНЁННЫЙ ОТЧЁТ
 # ══════════════════════════════════════════════════════════════════
 
@@ -619,6 +935,8 @@ class ObjectiveComparisonReport:
     numeric:   dict
     polarity:  dict
     entities:  Optional[dict] = None
+    causality: Optional[dict] = None
+    interpretation: Optional[dict] = None
 
     def hard_findings(self) -> list[str]:
         """Человекочитаемый список «жёстких» расхождений — то, что обязано
@@ -633,10 +951,27 @@ class ObjectiveComparisonReport:
         for fl in self.polarity["flips"]:
             out.append(f"полярность «{fl.fact_a.raw}» -> «{fl.fact_b.raw}» "
                        f"(контекст: …{fl.fact_a.context[-30:]})")
+        if self.causality and self.causality.get("introduced"):
+            markers = ", ".join(self.causality.get("introduced_markers") or []) or "причинная связка"
+            out.append(f"причинность: в кандидате введена связь, отсутствующая "
+                       f"в референсе ({markers})")
+        if self.interpretation and self.interpretation.get("count"):
+            for c in self.interpretation["contradictions"]:
+                out.append(f"ложная интерпретация: «{c['fragment']}» — оценка "
+                           f"«{c['claimed']}» противоречит значению (норма: {c['true']})")
         if self.entities:
             for cat, rep in self.entities.items():
                 for missing in rep["missing_in_b"]:
                     out.append(f"{cat}: «{missing}» не найдено в сравниваемом тексте")
+                # ВНИМАНИЕ: «лишние» сущности (extra_in_b) НЕ выносятся сюда как
+                # жёсткая находка. При сверке СВОДКИ с СЫРЫМ ИСТОЧНИКОМ добротная
+                # сводка законно НАЗЫВАЕТ диагнозы-синтез («стенокардия
+                # напряжения», «артериальная гипертензия»), которых нет дословно в
+                # источнике, — объективный слой не отличит корректный клинический
+                # синтез от настоящей галлюцинации. Это суждение требует
+                # клинических знаний и оставлено судьям (они видят extra_in_b
+                # отдельно в заземлении блока A — _ground_block_a). Иначе эталон
+                # ложно получает «галлюцинации».
         return out
 
     def to_summary(self) -> dict:
@@ -669,6 +1004,8 @@ class ObjectiveComparisonReport:
                 "flip_count": polarity.get("flip_count", 0),
                 "flips": [_fmt_pair(f) for f in polarity.get("flips", [])],
             },
+            "causality": dict(self.causality) if self.causality else None,
+            "interpretation": dict(self.interpretation) if self.interpretation else None,
             "entities": None,
         }
         if self.entities:
@@ -679,6 +1016,19 @@ class ObjectiveComparisonReport:
                 for cat, rep in self.entities.items()
             }
         return out
+
+
+def empty_report() -> ObjectiveComparisonReport:
+    """Пустой (нейтральный) отчёт — для режима «только LLM-судьи» (grounded=False),
+    когда объективный слой сознательно НЕ запускается. `hard_findings()` на нём
+    возвращает [], `to_summary()` — нулевые счётчики. Позволяет собрать
+    JudgeContext без вызова детерминированных проверок."""
+    return ObjectiveComparisonReport(
+        numeric={"total_in_a": 0, "matched": 0, "mismatch_count": 0,
+                 "unit_mismatch_count": 0, "mismatches": [], "unit_mismatches": []},
+        polarity={"total_in_a": 0, "matched": 0, "flip_count": 0, "flips": []},
+        entities=None, causality=None, interpretation=None,
+    )
 
 
 def compare_texts(text_a: str, text_b: str, *,
@@ -703,13 +1053,18 @@ def compare_texts(text_a: str, text_b: str, *,
     facts_pol_b = extract_polarity_facts(text_b)
     polarity = compare_polarity_facts(facts_pol_a, facts_pol_b)
 
+    causality = compare_causality(text_a, text_b)
+    interpretation = compare_interpretations(text_a, text_b)
+
     entities = None
     if panel is not None:
         ent_a = extract_semantic_entities(panel, text_a, role=entity_role, desc="сущности (A)")
         ent_b = extract_semantic_entities(panel, text_b, role=entity_role, desc="сущности (B)")
-        entities = compare_entity_sets(ent_a, ent_b)
+        entities = compare_entity_sets(ent_a, ent_b, text_a=text_a, text_b=text_b)
 
-    return ObjectiveComparisonReport(numeric=numeric, polarity=polarity, entities=entities)
+    return ObjectiveComparisonReport(numeric=numeric, polarity=polarity,
+                                     entities=entities, causality=causality,
+                                     interpretation=interpretation)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -720,6 +1075,56 @@ def _self_check():
     import glob
     import pandas as pd
 
+    print("=" * 70)
+    print("Нечёткое сопоставление сущностей и детектор причинности (юнит-проверки)")
+    print("=" * 70)
+    # Опечатки/словоформы/расшифровки — ДОЛЖНЫ считаться той же сущностью:
+    assert _entity_match("госпитализирована", "госпиталлизирована")
+    assert _entity_match("креатинфосфокиназа", "креатинфосфокиназы")
+    assert _entity_match("кфк (креатинфосфокиназа)", "кфк")
+    assert _entity_match("инфаркт", "инфаркт миокарда")
+    # Реальные клинические подмены — ДОЛЖНЫ остаться различимыми:
+    assert not _entity_match("кардиореанимация", "нейрореанимация")
+    assert not _entity_match("слабость", "головокружение")
+    # Введение ложной причинности ловится, нейтральное перечисление — нет:
+    assert compare_causality("инфаркт миокарда и курение",
+                             "инфаркт миокарда вследствие курения")["introduced"] == 1
+    assert compare_causality("инфаркт миокарда и курение",
+                             "инфаркт миокарда, курение в анамнезе")["introduced"] == 0
+    # Фильтр артефактов извлечения: «пропущенная» сущность, реально
+    # присутствующая в тексте кандидата, НЕ считается пропуском; реально
+    # удалённая — считается:
+    _art = compare_entity_sets({"medications": ["морфин"]}, {"medications": []},
+                               text_a="назначен морфин", text_b="назначен морфином внутривенно")
+    assert _art["medications"]["missing_in_b"] == [], "фантомный пропуск не отфильтрован"
+    _real = compare_entity_sets({"medications": ["морфин"]}, {"medications": []},
+                                text_a="назначен морфин", text_b="терапия скорректирована")
+    assert _real["medications"]["missing_in_b"] == ["морфин"], "реальный пропуск потерян"
+    # Обрамляющие слова экстрактора («определение») не мешают заземлению ядра:
+    assert _entity_present_in_text("определение гемоглобина", "гемоглобин 115 г/л")
+    assert not _entity_present_in_text("тошнота", "приступ загрудинных болей")
+    # SELF-GROUNDING: выдуманный экстрактором симптом (нет ни в одном тексте)
+    # не порождает ни missing, ни extra; реально присутствующий — порождает:
+    _hall = compare_entity_sets({"symptoms": ["тошнота"]}, {"symptoms": []},
+                                text_a="боль за грудиной", text_b="боль за грудиной")
+    assert _hall["symptoms"]["missing_in_b"] == [], "галлюцинация извлечения не отфильтрована"
+    _grounded = compare_entity_sets({"symptoms": ["тошнота"]}, {"symptoms": []},
+                                    text_a="тошнота и боль", text_b="боль за грудиной")
+    assert _grounded["symptoms"]["missing_in_b"] == ["тошнота"], "реальный пропуск симптома потерян"
+    # Ложная интерпретация: оценка ПРОТИВОРЕЧИТ диапазону -> флаг; согласованная
+    # (benign интерпретация_норма) и неоднозначная по единице -> НЕ флаг:
+    assert compare_interpretations("", "АД снижено (150/90 мм рт. ст.)")["count"] == 1
+    assert compare_interpretations("", "гемоглобин повышен (115 г/л)")["count"] == 1
+    assert compare_interpretations("", "ЧСС снижена (86 в минуту)")["count"] == 1
+    assert compare_interpretations("", "гемоглобин снижен (115 г/л)")["count"] == 0   # верно: низкий
+    assert compare_interpretations("", "АД повышено (174/98 мм рт. ст.)")["count"] == 0  # верно: высокое
+    assert compare_interpretations("", "КФК в норме (126 ед/л)")["count"] == 0        # ед/л неоднозначно
+    assert compare_interpretations("", "глюкоза в норме (5,6 ммоль/л)")["count"] == 0  # ммоль/л неоднозначно
+    print("  OK: опечатки склеиваются, подмены различимы, причинность ловится, "
+          "артефакты/галлюцинации извлечения отфильтрованы, ложная интерпретация "
+          "отделена от корректной по референсным диапазонам")
+
+    print()
     print("=" * 70)
     print("Извлечение фактов на реальной ЭМК (EMR_01)")
     print("=" * 70)

@@ -27,7 +27,6 @@ gate.py — pre-evaluation gate: бинарный фильтр перед LLM-as
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -64,6 +63,13 @@ MIN_SCHEMA_SECTIONS = 3
 # Если используется LLM-извлечение сущностей — порог recall (покрытие
 # сущностей источника в кандидате) по диагнозам/процедурам/препаратам.
 MIN_ENTITY_RECALL = 0.5
+
+# Категории, полное отсутствие которых (recall==0) — клинически критический
+# провал покрытия, а НЕ закономерная компрессия. Только их нулевое покрытие
+# блокирует общую (scope=None) сжимающую суммаризацию. Диагнозы и препараты —
+# то, без чего сводка по сути бесполезна/опасна; описательные категории
+# (departments/symptoms) добротная сводка может закономерно не покрыть.
+CRITICAL_ENTITY_CATEGORIES = ("diagnoses", "medications")
 
 
 @dataclass
@@ -190,19 +196,42 @@ def _schema_reason(summary_text: str) -> Optional[GateReason]:
     return None
 
 
-def _entity_recall_reasons(entity_report: dict) -> list[GateReason]:
+def _entity_recall_reasons(entity_report: dict, *, scope: Optional[str]) -> list[GateReason]:
+    """
+    Покрытие сущностей источника в кандидате.
+
+    scope=None (общая, СЖИМАЮЩАЯ суммаризация полного исходника): низкое покрытие —
+    ЗАКОНОМЕРНАЯ компрессия (сводка на ~500 симв. не повторяет каждую сущность
+    исходника на ~2000 симв.); полноту по сути оценивают судьи (блок B). Поэтому
+    здесь блокируем ТОЛЬКО полное отсутствие клинически КРИТИЧЕСКОЙ категории
+    (диагнозы/препараты, recall==0) — реальный провал, а не сжатие. Иначе любой
+    добротный конспект (включая эталон) ложно отклонялся бы из-за описательных
+    категорий вроде departments/symptoms, которые сводка закономерно опускает.
+
+    scope задан (целевая выжимка под адресата): сущности источника уже сужены
+    фильтром релевантности до значимых для задачи — их непокрытие значимо, поэтому
+    действует обычный порог MIN_ENTITY_RECALL.
+    """
     reasons = []
     for category, rep in entity_report.items():
         if rep["in_a"] == 0:
             continue
-        if rep["recall"] < MIN_ENTITY_RECALL:
+        recall = rep["recall"]
+        if scope is None:
+            if category in CRITICAL_ENTITY_CATEGORIES and recall == 0:
+                reasons.append(GateReason(
+                    code=f"entity_recall_zero:{category}",
+                    message=(f"в источнике есть сущности категории «{category}», в "
+                             f"кандидате — НИ ОДНОЙ ({', '.join(rep['missing_in_b'][:5]) or '—'}): "
+                             f"критическая информация полностью отсутствует"),
+                    severity="reject"))
+        elif recall < MIN_ENTITY_RECALL:
             reasons.append(GateReason(
                 code=f"entity_recall_low:{category}",
                 message=(f"низкая полнота сущностей категории «{category}»: "
-                         f"recall={rep['recall']:.0%} (порог {MIN_ENTITY_RECALL:.0%}); "
+                         f"recall={recall:.0%} (порог {MIN_ENTITY_RECALL:.0%}); "
                          f"пропущено: {', '.join(rep['missing_in_b'][:5]) or '—'}"),
-                severity="reject" if rep["recall"] == 0 else "rework",
-            ))
+                severity="reject" if recall == 0 else "rework"))
     return reasons
 
 
@@ -273,8 +302,9 @@ _RELEVANCE_FILTER_PROMPTS = {
 
 {lists}
 
-Ответь СТРОГО в формате JSON со списками номеров (целые числа) по категориям,
-например: {{"diagnoses": [0, 2], "medications": [], "procedures": [1], "departments": []}}
+Ответь СТРОГО в формате JSON со списками номеров (целые числа) по КАЖДОЙ
+категории, например: {{"diagnoses": [0, 2], "medications": [], "procedures": [1],
+"departments": [], "symptoms": [0], "anamnesis": [1]}}
 Если в категории нет релевантных пунктов — пустой список.
 """,
 }
@@ -305,6 +335,13 @@ def filter_relevant_entities(panel, entities: dict[str, list[str]], scope: str,
     result = panel.ask_json(
         role, prompt_template.format(lists=lists),
         desc=desc, max_attempts=2,
+        # think=False — это чисто экстрактивная/фильтрующая задача (отобрать
+        # релевантные пункты из уже извлечённых списков), рассуждения тут не
+        # нужны и не помогают. На qwen3:8b (Ollama 0.24) скрытые <think>-токены
+        # по умолчанию включены даже при format="json" и съедают весь бюджет
+        # num_predict, из-за чего JSON обрезается/приходит пустым (см. тот же
+        # фикс и комментарий в objective_layer.extract_semantic_entities).
+        think=False,
     )
 
     filtered: dict[str, list[str]] = {}
@@ -384,8 +421,12 @@ def evaluate_gate(source_text: str, summary_text: str, *,
         ent_a_for_recall = (filter_relevant_entities(panel, ent_a, scope, role=entity_role,
                                                       desc="шлюз: фильтр релевантности")
                             if scope is not None else ent_a)
-        entity_report = compare_entity_sets(ent_a_for_recall, ent_b)
-        reasons += _entity_recall_reasons(entity_report)
+        # Сырые тексты -> фильтр артефактов извлечения LLM в compare_entity_sets:
+        # «пропущенная» сущность, реально присутствующая в тексте суммаризации,
+        # не считается пропуском (это промах извлечения, а не потеря контента).
+        entity_report = compare_entity_sets(ent_a_for_recall, ent_b,
+                                            text_a=source_text, text_b=summary_text)
+        reasons += _entity_recall_reasons(entity_report, scope=scope)
 
     if any(r.severity == "reject" for r in reasons):
         status = "reject"

@@ -69,6 +69,7 @@ def generate(
     prompt: str,
     *,
     force_json: bool = True,
+    think: Optional[bool] = None,
     temperature: float = config.DEFAULT_TEMPERATURE,
     num_predict: int = config.DEFAULT_NUM_PREDICT,
     num_ctx: int = config.NUM_CTX,
@@ -82,6 +83,27 @@ def generate(
     ТОЛЬКО валидный JSON на уровне токенов (модель физически не может
     выйти за рамки JSON-грамматики). Отключайте для retry-промптов,
     где модель может предпочесть свободный текст.
+
+    think — явное управление режимом рассуждений «мыслящих» моделей
+    (qwen3, DeepSeek-R1 и т.п.). По умолчанию (None) параметр не передаётся
+    и Ollama использует своё поведение по умолчанию — для гибридных моделей
+    семейства qwen3 это, как правило, ВКЛЮЧЁННОЕ «мышление» даже при
+    format="json". Из-за этого скрытые рассуждения (<think>...</think>)
+    съедают бюджет num_predict ДО того, как модель доходит до самого
+    JSON-ответа — итог обрывается на середине (нет закрывающей скобки)
+    или оказывается пустым. Диагностировано прямым вызовом Ollama: тот же
+    промпт с think=False уложился в 592 токена (из 1024 бюджета) и вернул
+    полностью корректный JSON с done_reason="stop"; со включённым по
+    умолчанию «мышлением» бюджет тратился на рассуждения, и видимый ответ
+    обрывался. Поэтому для чисто экстрактивных задач (см. вызовы из
+    objective_layer.extract_semantic_entities/gate.filter_relevant_entities)
+    передавайте think=False явно — рассуждения там не нужны по сути задачи,
+    а их отключение одновременно чинит обрыв JSON и ускоряет вызов.
+    Раунды LLM-as-Judge (judge.py, R1/R2/R3) ТОЖЕ передают think=False: на
+    пилотном железе (qwen3:8b) включённое «мышление» регулярно обрывало большой
+    структурированный отчёт (особенно полный отчёт A-E в R2) — надёжность JSON
+    важнее теоретической пользы скрытых рассуждений; заземление (объективный
+    слой, шлюз, отчёты коллег) уже в промпте.
 
     При таймауте делает до `max_timeout_retries` повторов с паузой.
     """
@@ -97,6 +119,8 @@ def generate(
     }
     if force_json:
         payload["format"] = "json"
+    if think is not None:
+        payload["think"] = think
 
     last_exc: Optional[Exception] = None
     for attempt in range(1, max_timeout_retries + 2):
@@ -171,6 +195,55 @@ def repair_json(text: str) -> str:
     return text
 
 
+_DECODER = json.JSONDecoder()
+
+
+def _salvage_json_object(text: str) -> Optional[dict]:
+    """
+    ПОСЛЕДНИЙ РУБЕЖ восстановления. Когда объект целиком не парсится даже после
+    repair_json (типично — модель ОБОРВАЛА ответ на середине), собираем словарь
+    из тех ВЕРХНЕУРОВНЕВЫХ пар "ключ": значение, что успели прийти корректно и
+    ЦЕЛИКОМ. Каждое значение (объект подкритерия, строка, список, bool) парсится
+    по отдельности через json.raw_decode; первое же незавершённое значение
+    обрывает сбор — но всё, что до него, сохраняется.
+
+    Это то, что превращает «пришёл битый JSON → потеряли ВЕСЬ отчёт блока» в
+    «пришёл битый JSON → сохранили все подкритерии, кроме недописанного».
+    Возвращает dict (возможно частичный) или None, если не удалось собрать ничего.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    out: dict = {}
+    i, n = start + 1, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "}":
+            break
+        if ch == '"':
+            try:
+                key, key_end = _DECODER.raw_decode(text, i)   # ключ-строка
+            except ValueError:
+                break
+            j = key_end
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j >= n or text[j] != ":":
+                break
+            j += 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            try:
+                value, val_end = _DECODER.raw_decode(text, j)   # значение целиком
+            except ValueError:
+                break            # значение оборвано — дальше собирать нечего
+            out[str(key)] = value
+            i = val_end
+            continue
+        i += 1
+    return out or None
+
+
 def extract_json(raw: str) -> dict:
     """
     Извлекает JSON-объект из ответа модели: убирает markdown-обёртку,
@@ -219,6 +292,15 @@ def extract_json(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
+    # Последний рубеж: собрать объект из корректно пришедших верхнеуровневых
+    # пар (спасает оборванные ответы — сохраняем всё, кроме недописанного поля).
+    for candidate in (text, repair_json(text)):
+        salvaged = _salvage_json_object(candidate)
+        if salvaged:
+            log.warning("      JSON собран салважем верхнеуровневых полей "
+                        "(ответ был оборван); ключей извлечено: %d", len(salvaged))
+            return salvaged
+
     raise ValueError(f"JSON не удалось распарсить даже после ремонта. "
                      f"Фрагмент: {json_str[:300]!r}")
 
@@ -239,6 +321,7 @@ def ask_json(
     max_attempts: int = 3,
     fallback_prompt_fn: Optional[FallbackPromptFn] = None,
     validate_fn: Optional[ValidateFn] = None,
+    think: Optional[bool] = None,
     temperature: float = config.DEFAULT_TEMPERATURE,
     num_predict: int = config.DEFAULT_NUM_PREDICT,
 ) -> dict:
@@ -261,6 +344,11 @@ def ask_json(
         Может бросить ValueError, если результат выглядит как «заглушка»
         (например, все числовые поля равны нулю) — это запустит retry.
         Доменная валидация остаётся за вызывающим кодом, не за клиентом.
+
+    think — пробрасывается в generate() как есть (см. там подробное
+        объяснение диагностированной проблемы «мышление съедает num_predict
+        и обрывает JSON»). Передавайте think=False для чисто экстрактивных
+        промптов (см. objective_layer.extract_semantic_entities).
     """
     log.info("      %s %s | %d симв.", model_name, desc, len(prompt))
     last_raw = ""
@@ -280,7 +368,7 @@ def ask_json(
 
         try:
             raw = generate(model_name, current_prompt,
-                           force_json=force_json,
+                           force_json=force_json, think=think,
                            temperature=temperature, num_predict=num_predict)
             last_raw = raw
             log.debug("      RAW попытка %d: %.300s", attempt, raw)

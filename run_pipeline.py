@@ -80,16 +80,28 @@ def load_dataset(path: Path = DATA_PATH) -> pd.DataFrame:
 
 
 def run(*, limit: Optional[int] = None, profile: Optional[str] = None,
-        run_id: Optional[str] = None, use_checkpoints: bool = True) -> dict:
+        run_id: Optional[str] = None, use_checkpoints: bool = True,
+        scope: Optional[str] = config.DATASET_SCOPE) -> dict:
     """
     Полный (или усечённый --limit) прогон. Возвращает сводку:
     {n_pairs, results, audit_path, report_path, snapshot_path}.
+
+    scope — декларация ЗАДАЧИ суммаризации в этом датасете (см. подробное
+            объяснение в config.DATASET_SCOPE и judge._SCOPE_DESCRIPTIONS).
+            По умолчанию берётся из config.DATASET_SCOPE ("radiologist" —
+            нынешний датасет содержит ИМЕННО целевые выжимки «для
+            рентгенолога», а не полные суммаризации ЭМК). Передайте
+            scope=None, только если оцениваете ДРУГОЙ датасет с полными
+            суммаризациями — иначе шлюз будет сравнивать целевую выжимку
+            со ВСЕЙ картой и систематически отклонять корректные ответы
+            как «неполные» (см. gate.evaluate_gate, комментарий про
+            «системный ложный reject на целевых выжимках»).
     """
     df = load_dataset()
     if limit is not None:
         df = df.head(limit)
-    log.info("Загружено пар: %d (emr_id × model_id), профиль=%s",
-             len(df), profile or config.ACTIVE_PROFILE)
+    log.info("Загружено пар: %d (emr_id × model_id), профиль=%s, scope=%s",
+             len(df), profile or config.ACTIVE_PROFILE, scope)
 
     panel = JudgePanel(profile)
     logger = audit.AuditLogger(run_id=run_id)
@@ -103,16 +115,29 @@ def run(*, limit: Optional[int] = None, profile: Optional[str] = None,
 
         try:
             cached = judge.load_checkpoint(emr_id, model_id) if use_checkpoints else None
-            if cached is not None and "objective" in cached:
-                # Принимаем чекпоинт ТОЛЬКО если он уже содержит "objective" —
-                # запись формата ДО Блока 7 честно пересчитывается заново
-                # (иначе в audit-логе/отчёте появится молчаливый пробел в новой
-                # колонке для части пар — хуже, чем потратить время на пересчёт).
-                log.info("[%d/%d] %s / %s — из чекпоинта (Блок 4+7 формат)", i, len(df), emr_id, model_id)
+            # Принимаем чекпоинт ТОЛЬКО если: (а) он уже содержит "objective"
+            # (запись формата ДО Блока 7 честно пересчитывается заново — иначе
+            # в audit-логе/отчёте появится молчаливый пробел в новой колонке
+            # для части пар, хуже, чем потратить время на пересчёт), И
+            # (б) он посчитан с ТЕМ ЖЕ scope, что и текущий прогон — иначе
+            # словим ровно ту стэйл-проблему, что обнаружилась эмпирически:
+            # запись "EMR_10__2", посчитанная со scope=None (gate=reject —
+            # ложный отказ из-за сравнения целевой выжимки со ВСЕЙ картой),
+            # молча подставлялась бы дальше даже после исправления scope.
+            cached_ok = (cached is not None and "objective" in cached
+                         and cached.get("scope") == scope)
+            if cached_ok:
+                log.info("[%d/%d] %s / %s — из чекпоинта (Блок 4+7 формат, scope=%s)",
+                         i, len(df), emr_id, model_id, scope)
                 evaluation = cached
             else:
-                log.info("[%d/%d] %s / %s — оценка...", i, len(df), emr_id, model_id)
-                evaluation = judge.evaluate_summary(source_text, summary_text, emr_id, model_id, panel=panel)
+                if cached is not None and not cached_ok:
+                    log.info("[%d/%d] %s / %s — чекпоинт устарел (scope изменился: %s -> %s), пересчёт...",
+                             i, len(df), emr_id, model_id, cached.get("scope"), scope)
+                else:
+                    log.info("[%d/%d] %s / %s — оценка...", i, len(df), emr_id, model_id)
+                evaluation = judge.evaluate_summary(source_text, summary_text, emr_id, model_id,
+                                                     scope=scope, panel=panel)
                 if use_checkpoints:
                     judge.save_checkpoint(evaluation)
         except Exception as exc:
@@ -271,6 +296,12 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--profile", default=None, help="имя профиля моделей (по умолчанию — config.ACTIVE_PROFILE)")
     p.add_argument("--run-id", default=None, help="идентификатор прогона (по умолчанию — метка времени)")
     p.add_argument("--no-checkpoints", action="store_true", help="игнорировать сохранённые чекпоинты judge.py")
+    p.add_argument("--scope", default=None,
+                   help="декларация задачи суммаризации (по умолчанию — config.DATASET_SCOPE, "
+                        "сейчас 'radiologist' — целевые выжимки для рентгенолога). "
+                        "Передайте 'none', если оцениваете датасет с ПОЛНЫМИ суммаризациями ЭМК "
+                        "(иначе шлюз будет систематически отклонять корректные целевые выжимки "
+                        "как «неполные» — см. config.DATASET_SCOPE)")
     p.add_argument("--dry-run", action="store_true",
                    help="не вызывать LLM вовсе — прогнать самопроверку проводки на стаб-данных")
     return p
@@ -284,8 +315,15 @@ if __name__ == "__main__":
         _self_check_dry_run()
         sys.exit(0)
 
+    if args.scope is None:
+        scope = config.DATASET_SCOPE
+    elif args.scope.strip().lower() in ("none", "null", "-", ""):
+        scope = None
+    else:
+        scope = args.scope
+
     summary = run(limit=args.limit, profile=args.profile, run_id=args.run_id,
-                  use_checkpoints=not args.no_checkpoints)
+                  use_checkpoints=not args.no_checkpoints, scope=scope)
     print()
     print(f"Готово: {summary['n_pairs']} пар")
     print(f"  audit-лог: {summary['audit_path']}")
