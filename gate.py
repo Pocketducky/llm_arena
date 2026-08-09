@@ -503,7 +503,7 @@ def _self_check():
     print("просто отключает критерий целиком")
     print("=" * 70)
     try:
-        from ollama_client import JudgePanel
+        from llm_client import JudgePanel
         panel = JudgePanel()
         sample_ids = [(emr_id, mid) for emr_id, mid in
                       [("EMR_10", 2), ("EMR_10", 38), ("EMR_11", 2)]

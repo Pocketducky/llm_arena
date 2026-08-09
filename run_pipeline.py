@@ -62,7 +62,7 @@ import config
 import drift
 import judge
 import report
-from ollama_client import JudgePanel
+from llm_client import JudgePanel
 
 log = logging.getLogger("run_pipeline")
 
@@ -143,8 +143,8 @@ def run(*, limit: Optional[int] = None, profile: Optional[str] = None,
         except Exception as exc:
             # Известное ограничение пилотного железа (qwen3:8b — единственная
             # доступная модель на все роли): иногда модель не возвращает
-            # пригодный JSON даже после авторемонта/retry в ollama_client —
-            # OllamaError всплывает из objective_layer.extract_semantic_entities
+            # пригодный JSON даже после авторемонта/retry в llm_client —
+            # LLMError всплывает из objective_layer.extract_semantic_entities
             # (вызывается ИЗ ШЛЮЗА — gate.evaluate_gate — для семантических
             # сущностей), не пойманный там по дизайну Блока 3 (предполагалось,
             # что 2 retry'я внутри ask_json достаточно). Один сбойный ответ

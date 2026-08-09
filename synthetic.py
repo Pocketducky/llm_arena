@@ -56,7 +56,7 @@ import pandas as pd
 
 import objective_layer
 import reference_metrics
-from ollama_client import JudgePanel
+from llm_client import JudgePanel
 
 log = logging.getLogger("synthetic")
 

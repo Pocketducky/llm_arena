@@ -19,7 +19,7 @@ config.py (PILOT_PROFILE на пилотном железе, TARGET_PROFILE — 
 через JudgePanel.ask_json(role, ...).
 
 Из старого кода сознательно сохранены инженерные решения, доказавшие
-рабочесть (см. ollama_client.py — туда они уже перенесены и обобщены):
+рабочесть (см. llm_client.py — туда они уже перенесены и обобщены):
   • repair_json/extract_json — авторемонт «грязного» JSON
   • retry-цепочка: основной промпт -> без format=json -> упрощённый скелет
   • перемешивание порядка судей в раунде 2 (борьба с position bias)
@@ -39,7 +39,7 @@ import config
 import preprocessor
 import objective_layer
 import gate
-from ollama_client import JudgePanel, OllamaError
+from llm_client import JudgePanel, LLMError
 
 log = logging.getLogger("judge")
 
@@ -580,8 +580,8 @@ def _sentinel_block(block: str, reason: str) -> dict:
 def score_block(panel: JudgePanel, role: str, block: str, ctx: JudgeContext) -> dict:
     """Один запрос — оценка суммаризации по подкритериям ОДНОГО блока.
 
-    НИКОГДА не пробрасывает OllamaError наверх: при неустранимом сбое JSON
-    (исчерпаны все попытки, не спас даже салваж в ollama_client.extract_json)
+    НИКОГДА не пробрасывает LLMError наверх: при неустранимом сбое JSON
+    (исчерпаны все попытки, не спас даже салваж в llm_client.extract_json)
     возвращает `_sentinel_block` — «нет данных» по этому блоку, не трогая
     остальные. Раньше исключение прерывало score_round1 и терялся ВЕСЬ отчёт
     судьи (все 5 блоков) — это и был баг «оценки обнулялись».
@@ -598,7 +598,7 @@ def score_block(panel: JudgePanel, role: str, block: str, ctx: JudgeContext) -> 
             num_predict=1536,
             fallback_prompt_fn=_fallback_block_prompt(block, ctx.summary_text),
         )
-    except OllamaError as e:
+    except LLMError as e:
         log.error("    %s блок %s: JSON не получен после всех попыток (%s) — блок "
                   "помечен «нет данных», остальные блоки судьи сохраняются", role, block, e)
         return _sentinel_block(block, str(e))
@@ -733,7 +733,7 @@ def score_round2(panel: JudgePanel, role: str, ctx: JudgeContext,
             role, prompt, desc="R2 пересмотр (полные отчёты коллег)",
             max_attempts=2, validate_fn=None, think=False, num_predict=2048,
         )
-    except OllamaError as e:
+    except LLMError as e:
         log.warning("      %s R2: модель не вернула парсимый JSON (%.80s) — "
                     "оставляю отчёт R1 без изменений", role, str(e))
         return my_report
@@ -959,7 +959,7 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
         try:
             r1[role] = score_round1(panel, role, ctx)
             log.info("    %s: получен полный отчёт (блоки %s)", role, list(r1[role].keys()))
-        except OllamaError as e:
+        except LLMError as e:
             log.error("    %s провал R1: %s", role, e)
             r1[role] = None
 
@@ -982,7 +982,7 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
             r2[role] = score_round2(panel, role, ctx, r1[role],
                                      [r1[peers[0]], r1[peers[1]]])
             log.info("    %s: уточнённый отчёт получен", role)
-        except OllamaError as e:
+        except LLMError as e:
             log.warning("    %s провал R2 (%s) — оставляю отчёт R1", role, e)
             r2[role] = r1[role]
 
@@ -995,7 +995,7 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
 
     try:
         r3 = score_round3(panel, config.AGGREGATOR_ROLE, ctx, r1_list, r2_list)
-    except OllamaError as e:
+    except LLMError as e:
         log.error("    агрегатор провалился (%s) — итог недоступен", e)
         r3 = {"category": "ошибка", "e1_triggered": False, "e1_triggered_by": [],
               "verdict": f"Агрегатор недоступен: {e}", "summary_by_block": {}}
@@ -1083,7 +1083,7 @@ def _self_check():
     try:
         panel = JudgePanel()
         print(f"\nПанель: {panel}")
-    except OllamaError as e:
+    except LLMError as e:
         print(f"\n  (пропуск — LLM-панель недоступна: {e})")
         return
 
