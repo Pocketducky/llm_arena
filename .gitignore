@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 
+# Локальная конфигурация окружения (реальные адреса/ключи vLLM).
+# В репозитории остаётся только .env.example — шаблон.
+.env
+
 # Виртуальные окружения
 .venv/
 venv/
@@ -27,3 +31,4 @@ audit_log/
 checkpoints/
 reports/
 results/
+*.zip

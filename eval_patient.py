@@ -36,7 +36,7 @@ import config
 import objective_layer
 import gate
 import judge
-from ollama_client import JudgePanel, OllamaError
+from llm_client import JudgePanel, LLMError
 from synthetic import ROW_DISTORTIONS, SHEET_NAME, ROW_LABEL_COL  # легенда искажений
 
 log = logging.getLogger("eval_patient")
@@ -244,7 +244,7 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
     for role in roles:
         try:
             r1[role] = judge.score_round1(panel, role, ctx)
-        except OllamaError as e:
+        except LLMError as e:
             log.error("    %s провал R1: %s", role, e)
             r1[role] = None
     valid = [r for r in roles if r1.get(r) is not None]
@@ -264,7 +264,7 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
         try:
             r2[role] = judge.score_round2(panel, role, ctx, r1[role],
                                           [r1[peers[0]], r1[peers[1]]])
-        except OllamaError as e:
+        except LLMError as e:
             log.warning("    %s провал R2 (%s) — беру R1", role, e)
             r2[role] = r1[role]
 
@@ -274,7 +274,7 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
         r1_list.append(r1_list[-1]); r2_list.append(r2_list[-1])
     try:
         r3 = judge.score_round3(panel, config.AGGREGATOR_ROLE, ctx, r1_list, r2_list)
-    except OllamaError as e:
+    except LLMError as e:
         log.error("    агрегатор провалился: %s", e)
         r3 = {"category": "ошибка", "e1_triggered": False, "verdict": str(e),
               "summary_by_block": {}}

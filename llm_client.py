@@ -1,17 +1,18 @@
 """
-ollama_client.py — переиспользуемый клиент для общения с локальными LLM
-через Ollama, плюс «панель судей» (JudgePanel), абстрагирующая роли от
-конкретных моделей с помощью config.py.
+llm_client.py — переиспользуемый клиент для общения с LLM, плюс «панель судей»
+(JudgePanel), абстрагирующая роли от конкретных моделей с помощью config.py.
 
-Этот модуль НЕ содержит ничего специфичного для медицинской оценки —
-только инфраструктуру: HTTP-вызовы, восстановление JSON из «грязного»
-ответа модели, повторные попытки, маппинг ролей на модели. Промпты,
-схемы вывода и доменная логика живут в модулях более высокого уровня
-(препроцессор, объективный слой, judge-раунды).
+Поддерживает ДВА бэкенда (выбор — config.LLM_BACKEND):
+  • "vllm"   — продакшн НПКЦ: OpenAI-совместимый API vLLM (/v1/chat/completions);
+  • "ollama" — локальная разработка: нативный API Ollama (/api/generate).
+Весь остальной код пайплайна о бэкенде НЕ знает: он обращается к моделям только
+через JudgePanel.ask_json(role, ...).
 
-Большая часть низкоуровневой логики унаследована из предыдущей версии
-evaluator.py (repair_json/extract_json/retry-цепочка показали себя
-рабочими) — здесь она обобщена и отвязана от конкретных промптов.
+Модуль НЕ содержит ничего специфичного для медицинской оценки — только
+инфраструктуру: HTTP-вызовы, восстановление JSON из «грязного» ответа модели,
+повторные попытки, маппинг ролей на модели. Промпты, схемы вывода и доменная
+логика живут в модулях более высокого уровня (препроцессор, объективный слой,
+judge-раунды).
 """
 
 from __future__ import annotations
@@ -26,35 +27,54 @@ import requests
 
 import config
 
-log = logging.getLogger("ollama_client")
+log = logging.getLogger("llm_client")
 
 
-class OllamaError(RuntimeError):
-    """Ollama недоступна, модель не установлена или не вернула пригодный ответ."""
+class LLMError(RuntimeError):
+    """LLM-бэкенд недоступен, модель не обслуживается или не вернула пригодный ответ."""
+
+
+# Обратная совместимость: прежнее имя исключения (код ловит `OllamaError`).
+OllamaError = LLMError
 
 
 # ══════════════════════════════════════════════════════════════════
 # СЕРВЕР И СПИСОК МОДЕЛЕЙ
 # ══════════════════════════════════════════════════════════════════
 
-def list_available_models(timeout: float = 5.0) -> list[str]:
-    """Возвращает имена моделей, установленных в локальной Ollama."""
+def list_available_models(timeout: float = 5.0, *, endpoint: Optional[str] = None) -> list[str]:
+    """Имена моделей, обслуживаемых активным бэкендом. Для vLLM можно указать
+    конкретный endpoint (иначе — config.VLLM_BASE_URL)."""
+    if config.LLM_BACKEND == "ollama":
+        return _list_models_ollama(timeout)
+    return _list_models_vllm(endpoint or config.VLLM_BASE_URL, timeout)
+
+
+def _list_models_ollama(timeout: float) -> list[str]:
     try:
         r = requests.get(config.OLLAMA_TAGS_URL, timeout=timeout)
         r.raise_for_status()
         return [m["name"] for m in r.json().get("models", [])]
     except requests.exceptions.ConnectionError as e:
-        raise OllamaError(
-            "Ollama недоступна по адресу "
-            f"{config.OLLAMA_HOST}. Запустите сервер: `ollama serve`."
-        ) from e
+        raise LLMError(f"Ollama недоступна по адресу {config.OLLAMA_HOST}. "
+                       "Запустите сервер: `ollama serve`.") from e
+
+
+def _list_models_vllm(endpoint: str, timeout: float) -> list[str]:
+    try:
+        headers = {"Authorization": f"Bearer {config.VLLM_API_KEY}"}
+        r = requests.get(f"{endpoint.rstrip('/')}/models", headers=headers, timeout=timeout)
+        r.raise_for_status()
+        return [m["id"] for m in r.json().get("data", [])]
+    except requests.exceptions.ConnectionError as e:
+        raise LLMError(f"vLLM недоступен по адресу {endpoint}. Проверьте, что сервер "
+                       "запущен и адрес верный (EMR_VLLM_BASE_URL).") from e
 
 
 def is_model_available(model_name: str, available: Optional[list[str]] = None) -> bool:
     """
-    Проверяет, установлена ли модель локально.
-    Сравнение «по вхождению», т.к. Ollama может возвращать теги с
-    суффиксом квантизации (например, "qwen3:8b" в списке как "qwen3:8b").
+    Проверяет, обслуживается ли модель бэкендом. Сравнение «по вхождению»,
+    т.к. бэкенды могут возвращать имена с суффиксами (квантизация/путь).
     """
     available = available if available is not None else list_available_models()
     return any(model_name == m or model_name in m for m in available)
@@ -107,6 +127,20 @@ def generate(
 
     При таймауте делает до `max_timeout_retries` повторов с паузой.
     """
+    if config.LLM_BACKEND == "ollama":
+        return _generate_ollama(
+            model_name, prompt, force_json=force_json, think=think,
+            temperature=temperature, num_predict=num_predict, num_ctx=num_ctx,
+            timeout=timeout, max_timeout_retries=max_timeout_retries)
+    return _generate_vllm(
+        model_name, prompt, force_json=force_json, think=think,
+        temperature=temperature, max_tokens=num_predict,
+        timeout=timeout, max_timeout_retries=max_timeout_retries)
+
+
+def _generate_ollama(model_name, prompt, *, force_json, think, temperature,
+                     num_predict, num_ctx, timeout, max_timeout_retries) -> str:
+    """Нативный вызов Ollama (/api/generate)."""
     payload = {
         "model": model_name,
         "prompt": prompt,
@@ -129,10 +163,8 @@ def generate(
             r.raise_for_status()
             resp = r.json()
             used = resp.get("prompt_eval_count", "?")
-            log.debug(
-                "        %s: токенов %s/%s%s",
-                model_name, used, num_ctx, " [JSON mode]" if force_json else "",
-            )
+            log.debug("        %s: токенов %s/%s%s", model_name, used, num_ctx,
+                      " [JSON mode]" if force_json else "")
             return resp["response"]
         except requests.exceptions.Timeout as e:
             last_exc = e
@@ -141,13 +173,72 @@ def generate(
             if attempt <= max_timeout_retries:
                 time.sleep(config.RETRY_SLEEP_SECONDS)
         except requests.exceptions.ConnectionError as e:
-            raise OllamaError(
-                f"Ollama недоступна по адресу {config.OLLAMA_HOST} "
-                f"при обращении к модели '{model_name}'."
+            raise LLMError(f"Ollama недоступна по адресу {config.OLLAMA_HOST} "
+                           f"при обращении к модели '{model_name}'.") from e
+
+    raise LLMError(f"Модель '{model_name}' не ответила за отведённое время "
+                   f"после {max_timeout_retries + 1} попыток") from last_exc
+
+
+def _generate_vllm(model_name, prompt, *, force_json, think, temperature,
+                   max_tokens, timeout, max_timeout_retries) -> str:
+    """OpenAI-совместимый вызов vLLM (/v1/chat/completions).
+
+    force_json → response_format={"type":"json_object"} (guided JSON у vLLM —
+    аналог Ollama format="json"). Управление «мышлением» Qwen3 — через
+    chat_template_kwargs.enable_thinking: по умолчанию (config.VLLM_ENABLE_THINKING
+    выключен) размышления ОТКЛЮЧЕНЫ для надёжности JSON; при включённом флаге
+    решает параметр think вызова."""
+    endpoint = config.vllm_endpoint_for(model_name)
+    url = f"{endpoint.rstrip('/')}/chat/completions"
+    payload: dict = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    if force_json:
+        payload["response_format"] = {"type": "json_object"}
+    if config.VLLM_ENABLE_THINKING:
+        if think is not None:
+            payload["chat_template_kwargs"] = {"enable_thinking": bool(think)}
+    else:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    headers = {"Authorization": f"Bearer {config.VLLM_API_KEY}",
+               "Content-Type": "application/json"}
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_timeout_retries + 2):
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            choice = (data.get("choices") or [{}])[0]
+            content = ((choice.get("message") or {}).get("content")) or ""
+            usage = (data.get("usage") or {}).get("total_tokens", "?")
+            log.debug("        %s: vLLM ok (токенов %s)%s", model_name, usage,
+                      " [JSON mode]" if force_json else "")
+            return content
+        except requests.exceptions.Timeout as e:
+            last_exc = e
+            log.warning("        таймаут (%s) попытка %d/%d",
+                        model_name, attempt, max_timeout_retries + 1)
+            if attempt <= max_timeout_retries:
+                time.sleep(config.RETRY_SLEEP_SECONDS)
+        except requests.exceptions.ConnectionError as e:
+            raise LLMError(f"vLLM недоступен по адресу {endpoint} при обращении "
+                           f"к модели '{model_name}'.") from e
+        except requests.exceptions.HTTPError as e:
+            body = getattr(getattr(e, "response", None), "text", "") or ""
+            raise LLMError(
+                f"vLLM вернул ошибку для модели '{model_name}' ({endpoint}): {e}. "
+                f"Ответ: {body[:300]}. Сверьте имя модели с /v1/models "
+                "(--served-model-name)."
             ) from e
 
-    raise OllamaError(f"Модель '{model_name}' не ответила за отведённое время "
-                      f"после {max_timeout_retries + 1} попыток") from last_exc
+    raise LLMError(f"Модель '{model_name}' (vLLM) не ответила за отведённое время "
+                   f"после {max_timeout_retries + 1} попыток") from last_exc
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -387,8 +478,8 @@ def ask_json(
             if attempt < max_attempts:
                 time.sleep(3)
 
-    raise OllamaError(f"Модель '{model_name}' не вернула пригодный JSON "
-                      f"после {max_attempts} попыток ({desc})")
+    raise LLMError(f"Модель '{model_name}' не вернула пригодный JSON "
+                   f"после {max_attempts} попыток ({desc})")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -398,13 +489,12 @@ def ask_json(
 class JudgePanel:
     """
     Связывает абстрактные роли ("judge_1", "judge_2", "judge_3", "aggregator")
-    с конкретными моделями Ollama согласно выбранному профилю из config.py.
+    с конкретными моделями согласно выбранному профилю из config.py.
 
     Весь код пайплайна оценки обращается ИСКЛЮЧИТЕЛЬНО к ролям через эту
-    панель — благодаря этому переключение профиля (например, "pilot" → "target",
-    когда появится GPU-инфраструктура с DeepSeek-R1 70B и Qwen3-Next-80B)
-    не требует изменений в коде препроцессора, объективного слоя, промптов
-    или агрегации.
+    панель — благодаря этому смена профиля или бэкенда (vLLM в НПКЦ ↔ Ollama
+    локально) не требует изменений в коде препроцессора, объективного слоя,
+    промптов или агрегации.
 
     Пример:
         panel = JudgePanel()                 # активный профиль из config.ACTIVE_PROFILE
@@ -427,12 +517,12 @@ class JudgePanel:
 
     def availability_report(self) -> dict[str, dict]:
         """
-        Сверяет модели текущего профиля со списком, реально установленным
-        в Ollama. Возвращает {роль: {"model": ..., "available": bool}}.
+        Сверяет модели текущего профиля со списком, реально обслуживаемым
+        активным бэкендом. Возвращает {роль: {"model": ..., "available": bool}}.
         """
         try:
             available = list_available_models()
-        except OllamaError:
+        except LLMError:
             return {role: {"model": self.model_for(role), "available": None}
                     for role in self.profile.roles}
 

@@ -1,4 +1,11 @@
-pandas
-openpyxl
-requests
-chardet
+# Основные зависимости системы оценки суммаризаций ЭМК.
+# Установка:  pip install -r requirements.txt
+#
+# Reference-метрики BERTScore (тяжёлые: torch+transformers) вынесены отдельно —
+# см. requirements-metrics.txt (нужны только для synthetic.py --ref-metrics).
+
+requests>=2.31        # HTTP-вызовы к vLLM / Ollama (llm_client.py)
+pandas>=2.0           # чтение/запись Excel-датасета и отчётов
+openpyxl>=3.1         # движок Excel для pandas и report.py
+chardet>=5.0          # определение кодировки исходных .txt (prepare_data.py)
+scipy>=1.10           # Spearman ρ с p-value (correlation.py); опционально — есть ручной fallback

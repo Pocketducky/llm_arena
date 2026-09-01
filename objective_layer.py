@@ -318,7 +318,7 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
     panel=None — функция не вызывается (обёртки выше должны проверять сами).
 
     Намеренно тонкий слой над `panel.ask_json`: вся специфика — в промпте
-    и схеме, retry/JSON-восстановление остаются в ollama_client. Результат
+    и схеме, retry/JSON-восстановление остаются в llm_client. Результат
     кэшируется по (роль, текст) на время процесса (см. _ENTITY_CACHE).
     """
     cache_key = (role, text[:6000])
@@ -342,7 +342,7 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
         # поведении по умолчанию (think включён даже с format="json") скрытые
         # рассуждения <think>...</think> съедают весь бюджет num_predict ДО
         # самого JSON-ответа — итог обрывается без закрывающей скобки или
-        # оказывается пустым (см. подробности в ollama_client.generate).
+        # оказывается пустым (см. подробности в llm_client.generate).
         # Здесь — чисто экстрактивная задача без нужды в рассуждениях:
         # явное отключение чинит обрыв И ускоряет вызов (тот же промпт с
         # think=False уложился в 592 из 1024 токенов, done_reason="stop").
