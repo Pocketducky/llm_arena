@@ -18,12 +18,31 @@ vLLM. Для локальной разработки достаточно выс
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 
 # ══════════════════════════════════════════════════════════════════
 # ЗАГРУЗКА .env (без внешних зависимостей)
 # ══════════════════════════════════════════════════════════════════
+
+def _clean_env_value(raw: str) -> str:
+    """Значение из строки `.env`: снимает кавычки и КОНЦЕВОЙ комментарий.
+
+    Без срезки комментария строка вида `EMR_MAX_TOKENS=4096  # база` давала
+    значение "4096  # база", int() падал, и параметр молча откатывался к
+    умолчанию — то есть правка `.env` не действовала, а оператор об этом не
+    узнавал. Комментарием считается `#` ПОСЛЕ пробела (чтобы не резать значения,
+    где `#` — часть самой строки); в кавычках комментарии не ищутся вовсе.
+    """
+    val = raw.strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+        return val[1:-1]
+    cut = re.search(r"\s#", val)
+    if cut:
+        val = val[:cut.start()].rstrip()
+    return val
+
 
 def _load_dotenv() -> None:
     """Мини-загрузчик файла `.env` рядом с config.py: строки вида KEY=VALUE.
@@ -40,7 +59,7 @@ def _load_dotenv() -> None:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, _, val = line.partition("=")
-                os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+                os.environ.setdefault(key.strip(), _clean_env_value(val))
     except OSError:
         pass
 

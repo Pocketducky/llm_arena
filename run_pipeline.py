@@ -155,12 +155,20 @@ def run(*, limit: Optional[int] = None, profile: Optional[str] = None,
                       i, len(df), emr_id, model_id, exc)
             evaluation = judge._err(emr_id, model_id, f"Прогон прерван исключением: {exc}")
 
-        finalized = aggregator.finalize(evaluation)
+        try:
+            finalized = aggregator.finalize(evaluation)
+        except Exception as agg_exc:   # noqa: BLE001 — агрегация не должна ронять прогон
+            log.exception("[%d/%d] %s / %s — сбой агрегации: %s",
+                          i, len(df), emr_id, model_id, agg_exc)
+            finalized = {**judge._err(emr_id, model_id,
+                                      f"Сбой детерминированной агрегации: {agg_exc}"),
+                         "blocks": {}, "decision_path": [f"Агрегация упала: {agg_exc}"],
+                         "e1_triggered": False, "e1_sources": []}
         results.append(finalized)
 
         logger.log_evaluation(emr_id=emr_id, model_id=model_id, evaluation=finalized,
                               source_text=source_text, summary_text=summary_text,
-                              profile_name=profile)
+                              profile_name=profile, scope=scope)
 
         log.info("    -> %s (шлюз=%s, объективный=%s)", finalized.get("category"),
                  (finalized.get("gate") or {}).get("status"),

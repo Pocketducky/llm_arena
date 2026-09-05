@@ -59,11 +59,25 @@ def _thresholds_snapshot() -> dict:
     значения: достаточно, чтобы постфактум понять, ПОЧЕМУ шлюз решил
     именно так, и заметить, если порог впоследствии изменится.
     """
+    import config
     return {
         "gate.MIN_SCHEMA_SECTIONS": gate.MIN_SCHEMA_SECTIONS,
         "gate.MIN_ENTITY_RECALL": gate.MIN_ENTITY_RECALL,
         "gate.CRITICAL_NUMERIC_CATEGORIES": list(gate.CRITICAL_NUMERIC_CATEGORIES),
         "gate.CRITICAL_PREDICATES": list(gate.CRITICAL_PREDICATES),
+        # Раньше здесь не было CRITICAL_ENTITY_CATEGORIES — то есть константа,
+        # решающая исход шлюза при scope=None, не версионировалась вовсе.
+        "gate.CRITICAL_ENTITY_CATEGORIES": list(gate.CRITICAL_ENTITY_CATEGORIES),
+        # Параметры, влияющие на вердикт не меньше порогов шлюза.
+        "config.E1_REQUIRE_CITATION": config.E1_REQUIRE_CITATION,
+        "config.MAX_NODATA_BLOCKS": config.MAX_NODATA_BLOCKS,
+        "config.TEMPERATURE": config.DEFAULT_TEMPERATURE,
+        "config.SEED": config.SEED,
+        "config.TOKENS": {"r1": config.TOKENS_R1, "r1_large": config.TOKENS_R1_LARGE,
+                          "r2": config.TOKENS_R2, "r3": config.TOKENS_R3,
+                          "entities": config.TOKENS_ENTITIES,
+                          "ceiling": config.MAX_TOKENS_CEILING},
+        "config.ENTITY_MAX_CHARS": config.ENTITY_MAX_CHARS,
     }
 
 
@@ -125,7 +139,12 @@ class AuditEntry:
         return cls(
             run_id=run_id,
             timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            emr_id=emr_id, model_id=model_id, scope=scope,
+            emr_id=emr_id, model_id=model_id,
+            # scope критичен для реконструкции решения (от него зависит НАБОР
+            # правил шлюза, а не только пороги). run_pipeline его не передавал,
+            # и во всех записях аудита стояло scope: null — подстраховываемся
+            # значением из самого результата оценки.
+            scope=scope if scope is not None else evaluation.get("scope"),
             source_hash=_hash_text(source_text),
             summary_hash=_hash_text(summary_text),
             versions=versions_snapshot(profile_name),
