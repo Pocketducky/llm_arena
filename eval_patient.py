@@ -273,9 +273,9 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
                            gate_reasons, "ошибка", False, {}, findings,
                            "R1: все судьи провалились")
 
-    import random
     shuffled = valid.copy()
-    random.shuffle(shuffled)
+    # Воспроизводимый порядок рецензентов: тот же механизм, что в judge.py.
+    judge.rng_for(patient, row, "r2").shuffle(shuffled)
     r2: dict[str, dict] = {}
     for role in shuffled:
         peers = [r for r in shuffled if r != role] or [role]

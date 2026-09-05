@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -170,11 +171,15 @@ class AuditLogger:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / f"{self.run_id}.jsonl"
         self._n = 0
+        self._lock = threading.Lock()
 
     def log(self, entry: AuditEntry) -> None:
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(entry.to_json() + "\n")
-        self._n += 1
+        # Блокировка нужна с появлением параллельного прогона (config.CONCURRENCY):
+        # без неё строки JSONL из разных потоков могли бы перемешаться внутри строки.
+        with self._lock:
+            with open(self.path, "a", encoding="utf-8") as fh:
+                fh.write(entry.to_json() + "\n")
+            self._n += 1
 
     def log_evaluation(self, *, emr_id: str, model_id: str, evaluation: dict,
                        source_text: Optional[str] = None, summary_text: Optional[str] = None,

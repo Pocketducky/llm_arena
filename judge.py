@@ -934,6 +934,22 @@ def score_round3(panel: JudgePanel, role: str, ctx: JudgeContext,
     )
 
 
+def rng_for(*parts: object) -> random.Random:
+    """Детерминированный ГСЧ, привязанный к config.SEED и идентификатору пары.
+
+    Раньше порядок судей в R2/R3 задавался ГЛОБАЛЬНЫМ random.shuffle без seed:
+    два прогона на одних данных давали разные назначения рецензентов, а значит
+    потенциально разные вердикты — и объяснить расхождение было нечем. Это
+    обесценивало версионирование промптов/таксономии/таблицы решений, ради
+    которого в audit.py снимаются PROMPT_SET_VERSION и соседние поля.
+
+    Seed привязан ещё и к идентификатору пары: порядок по-прежнему РАЗНЫЙ для
+    разных пар (иначе position bias закрепился бы одинаково для всего корпуса),
+    но при одном config.SEED полностью воспроизводим.
+    """
+    return random.Random(f"{config.SEED}|" + "|".join(str(p) for p in parts))
+
+
 def _citation_supported(citation: str, summary_text: str) -> bool:
     """Действительно ли приведённый судьёй «опасный фрагмент» есть в суммаризации.
 
@@ -1157,7 +1173,8 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
     # ── РАУНД 2 — cross-peer-review с полными отчётами ───────────
     log.info("  [R2] Cross-peer-review (полные отчёты)...")
     shuffled = valid_roles.copy()
-    random.shuffle(shuffled)   # против position bias — сохранено из evaluator.py
+    # против position bias, но ВОСПРОИЗВОДИМО (см. rng_for)
+    rng_for(emr_id, model_id, "r2").shuffle(shuffled)
 
     r2: dict[str, dict] = {}
     for role in shuffled:
