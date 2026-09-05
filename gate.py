@@ -72,6 +72,11 @@ MIN_ENTITY_RECALL = 0.5
 # (departments/symptoms) добротная сводка может закономерно не покрыть.
 CRITICAL_ENTITY_CATEGORIES = ("diagnoses", "medications")
 
+# Длина нормализованного ключа предиката. Должна совпадать со срезом в
+# objective_layer._predicate_counts (predicate_norm[:6]); держим одним
+# именем, чтобы рассинхрон не воспроизвёлся.
+PREDICATE_KEY_LEN = 6
+
 
 @dataclass
 class GateReason:
@@ -79,6 +84,7 @@ class GateReason:
     code: str           # машиночитаемый код причины (для статистики/фильтров)
     message: str        # человекочитаемое описание (для отчёта/лога)
     severity: str       # "reject" | "rework" — насколько критична причина
+    degenerate: bool = False   # вход негоден к оценке в принципе (см. ниже)
 
 
 @dataclass
@@ -87,16 +93,21 @@ class GateDecision:
     Итог работы шлюза.
 
     status:
-      "pass"   — суммаризация проходит дальше, к LLM-as-Judge
-      "rework" — формально проходима, но есть значимые пропуски —
-                 имеет смысл доработать перед повторной оценкой
-      "reject" — фундаментальные пропуски критической информации —
-                 LLM-оценка не запускается вовсе (экономия GPU)
+      "pass"   — замечаний нет;
+      "rework" — есть значимые пропуски, имеет смысл доработать;
+      "reject" — фундаментальные пропуски критической информации.
 
-    "rework" vs "reject" — это всё ещё ОДИН и тот же бинарный исход
-    («не прошла» -> дальше не идёт), просто с разной тяжестью причины:
-    решение «прошла/не прошла» принимается по `passed`, а это разделение
-    нужно только для приоритизации при последующем ручном разборе причин.
+    ВАЖНО (изменение против v1): шлюз больше НЕ ОТСЕКАЕТ пары. Раньше
+    status=="reject" означал немедленное «Неприемлемо» без запуска судей —
+    то есть худшую клиническую категорию без единого свидетельства. Ложные
+    отказы при этом были массовыми и измеримыми: 77 reject из 380 пар
+    синтетического набора (20 %), а у пациентов М3 и Ж4 — 38/38, включая
+    эталонную строку. Теперь вердикт шлюза — СИГНАЛ: он ограничивает потолок
+    категории в aggregator._decide и целиком попадает в отчёт.
+
+    Единственное исключение — `is_degenerate()`: пустая, почти пустая или
+    иноязычная суммаризация. Там оценивать нечего по существу, и запускать
+    ~20 LLM-вызовов бессмысленно.
     """
     status: str
     reasons: list[GateReason] = field(default_factory=list)
@@ -108,6 +119,56 @@ class GateDecision:
 
     def reason_codes(self) -> list[str]:
         return [r.code for r in self.reasons]
+
+    def is_degenerate(self) -> bool:
+        """Вход негоден к оценке как таковой (пустой текст, не тот язык)."""
+        return any(r.degenerate for r in self.reasons)
+
+
+# Минимальная длина, ниже которой суммаризация считается пустой по существу.
+MIN_SUMMARY_CHARS = 40
+# Минимальная доля кириллицы среди буквенных символов. Корпус русскоязычный;
+# ответ на другом языке (или «ыыы»/латиница) — это сбой генерации, а не плохое
+# качество суммаризации.
+MIN_CYRILLIC_SHARE = 0.5
+
+
+def _degenerate_input_reasons(summary_text: str) -> list[GateReason]:
+    """Проверки, которых в шлюзе не было вовсе — из-за чего он деградировал
+    «ОТКРЫТО».
+
+    Проверено на v1: при scope="radiologist" правила по числам и предикатам не
+    выполняются вообще, и если извлечение сущностей вернуло пустоту, у шлюза не
+    остаётся ни одного действующего правила. В результате пустая строка, «ыыы» и
+    английский текст ПРОХОДИЛИ шлюз со статусом pass.
+    """
+    reasons: list[GateReason] = []
+    text = (summary_text or "").strip()
+    if not text:
+        return [GateReason(
+            code="empty_summary",
+            message="суммаризация пуста (нет ни одного непробельного символа)",
+            severity="reject", degenerate=True)]
+    if len(text) < MIN_SUMMARY_CHARS:
+        reasons.append(GateReason(
+            code="empty_summary",
+            message=(f"суммаризация вырожденно коротка: {len(text)} симв. "
+                     f"(минимум для оценки — {MIN_SUMMARY_CHARS})"),
+            severity="reject", degenerate=True))
+        return reasons
+
+    letters = [ch for ch in text if ch.isalpha()]
+    if letters:
+        cyr = sum(1 for ch in letters if "\u0400" <= ch <= "\u04ff")
+        share = cyr / len(letters)
+        if share < MIN_CYRILLIC_SHARE:
+            reasons.append(GateReason(
+                code="wrong_language",
+                message=(f"текст суммаризации не русскоязычный: доля кириллицы "
+                         f"{share:.0%} (порог {MIN_CYRILLIC_SHARE:.0%}) — "
+                         f"похоже на сбой генерации, а не на качество сводки"),
+                severity="reject", degenerate=True))
+    return reasons
 
 
 def _category_counts(facts: list[NumericFact]) -> dict[str, int]:
@@ -165,10 +226,16 @@ def _predicate_coverage_reasons(facts_a: list[PolarityFact],
     counts_a, counts_b = _predicate_counts(facts_a), _predicate_counts(facts_b)
     reasons = []
     for predicate in CRITICAL_PREDICATES:
-        total = counts_a.get(predicate, 0)
+        # objective_layer нормализует предикаты, обрезая их до 6 символов
+        # (_predicate_counts <- predicate_norm[:6]). Стем "обнаруж" — 7 символов,
+        # поэтому counts_a.get("обнаруж") всегда возвращал 0, и ЦЕЛАЯ ПЯТАЯ ЧАСТЬ
+        # правила критических предикатов не срабатывала никогда. Сравниваем по
+        # той же нормализации, что и на стороне ключей.
+        key = predicate[:PREDICATE_KEY_LEN]
+        total = counts_a.get(key, 0)
         if total == 0:
             continue
-        present = counts_b.get(predicate, 0)
+        present = counts_b.get(key, 0)
         if present == 0:
             reasons.append(GateReason(
                 code=f"predicate_coverage_low:{predicate}",
@@ -354,6 +421,32 @@ def filter_relevant_entities(panel, entities: dict[str, list[str]], scope: str,
     return filtered
 
 
+def supported_scopes() -> list[str]:
+    """Задачи/адресаты, для которых есть фильтр релевантности."""
+    return sorted(_RELEVANCE_FILTER_PROMPTS)
+
+
+def validate_scope(scope: Optional[str]) -> None:
+    """Падает с внятной ошибкой на неизвестном scope.
+
+    Раньше значение не проверялось нигде: опечатка вроде `--scope radiologists`
+    молча приводила к худшему из возможных сочетаний — фильтр релевантности
+    не находил шаблон и возвращал сущности КАК ЕСТЬ (gate.filter_relevant_entities),
+    а ветка порога при этом включалась строгая (recall < MIN_ENTITY_RECALL по
+    ВСЕМ шести категориям). Это ровно тот системный ложный reject, ради
+    предотвращения которого scope и вводился.
+    """
+    if scope is None:
+        return
+    if scope not in _RELEVANCE_FILTER_PROMPTS:
+        raise SystemExit(
+            f"Неизвестный scope {scope!r}. Поддерживаются: {supported_scopes()}, "
+            f"либо пустое значение (общая сжимающая суммаризация без фильтра "
+            f"релевантности). Неизвестный scope включил бы строгий порог "
+            f"entity_recall БЕЗ фильтра релевантности — это системный ложный отказ."
+        )
+
+
 def evaluate_gate(source_text: str, summary_text: str, *,
                   scope: Optional[str] = None,
                   panel=None, entity_role: str = "judge_1") -> GateDecision:
@@ -386,6 +479,17 @@ def evaluate_gate(source_text: str, summary_text: str, *,
       • нет «reject», но есть «rework»  -> status="rework"
       • причин нет                      -> status="pass"
     """
+    validate_scope(scope)
+
+    # Вырожденный вход — ПЕРВЫМ и до любых LLM-вызовов: на пустом или
+    # иноязычном тексте нечего извлекать, а извлечение сущностей — это два
+    # обращения к модели. Раньше таких проверок не было вовсе, и шлюз
+    # деградировал «открыто»: пустая строка проходила со статусом pass.
+    degenerate = _degenerate_input_reasons(summary_text)
+    if degenerate:
+        return GateDecision(status="reject", reasons=degenerate,
+                            coverage={"declared_scope": scope, "degenerate": True})
+
     facts_num_a = extract_numeric_facts(source_text)
     facts_num_b = extract_numeric_facts(summary_text)
 
@@ -403,14 +507,18 @@ def evaluate_gate(source_text: str, summary_text: str, *,
     # применяется — целевая выжимка законно опускает нерелевантные разделы;
     # «критичность» там проверяется через сущности, см. ниже.
 
-    # Структурная полнота (D1) — НЕ критерий шлюза: план относит структурную
-    # метрику к Блоку 2 (диагностика «что не так»), а шлюз — к проверке
-    # ФАКТИЧЕСКОГО покрытия. К тому же формат документов может законно
-    # отличаться от строгой схемы B1-B5 (см. синтетический набор — это
-    # повествовательные перефразы, не структурированные суммаризации, и
-    # их «несоответствие схеме» не означает потери фактов). Несём как
-    # информационный сигнал в отчёт — пригодится для аудита (Блок 7) и
-    # ручного разбора причин, но решение «пропустить/не пропустить» не меняет.
+    # Структурная полнота (D1) — НАМЕРЕННО НЕ критерий шлюза: план относит
+    # структурную метрику к Блоку 2 (диагностика «что не так»), а шлюз — к
+    # проверке ФАКТИЧЕСКОГО покрытия. Формат документа может законно отличаться
+    # от схемы B1-B5 (синтетический набор — повествовательные перефразы, а не
+    # структурированные суммаризации).
+    #
+    # ⚠️  НЕ ДОБАВЛЯЙТЕ schema_reason в `reasons`, даже если кажется, что это
+    # «забытая проводка». Измерено: на 380 из 380 коротких нарративных
+    # суммаризаций распознаётся 0 из 5 разделов схемы, то есть severity здесь
+    # всегда "reject". Включение этой причины даёт мгновенный 100 % отказ на
+    # всём синтетическом корпусе. Сигнал остаётся информационным и уходит в
+    # coverage["schema_note"] -> отчёт.
     schema_reason = _schema_reason(summary_text)
 
     entity_report = None

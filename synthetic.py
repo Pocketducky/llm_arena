@@ -443,19 +443,29 @@ class ProductionResult:
     rejected: bool
 
 
-def run_production(pairs: list[EvalPair], *, panel: JudgePanel) -> list[ProductionResult]:
+def run_production(pairs: list[EvalPair], *, panel: JudgePanel,
+                   scope: Optional[str] = None) -> list[ProductionResult]:
     """Режим B: гоним эталон->кандидат через реальный конвейер judge.evaluate_summary
-    (референс — эталонная суммаризация стр.1, см. build_pairs)."""
+    (референс — эталонная суммаризация стр.1, см. build_pairs).
+
+    `scope` — тот же параметр, что и в прод-прогоне. Раньше был жёстко зашит
+    None, из-за чего валидация шла по ДРУГОМУ набору правил шлюза, чем прод.
+    """
+    import aggregator
     import judge  # тяжёлый импорт — только если режим B реально запускают
     results: list[ProductionResult] = []
     for i, p in enumerate(pairs, 1):
         log.info("synthetic[B]: %d/%d %s (%s)", i, len(pairs), p.pair_id, p.spec.dtype)
         ev = judge.evaluate_summary(p.reference, p.candidate,
                                     emr_id=p.column, model_id=f"row{p.row}",
-                                    scope=None, panel=panel)
+                                    scope=scope, panel=panel)
+        ev = aggregator.finalize(ev)     # категорию выносит код, а не самооценка R3
         gate_status = (ev.get("gate") or {}).get("status", "?")
         category = ev.get("category", "?")
-        rejected = (category == "Неприемлемо") or (gate_status == "reject")
+        # Служебные статусы («ошибка», «Оценка неполна») — НЕ отказ по существу:
+        # засчитывать их как reject значило бы мерить надёжность инфраструктуры
+        # вместо качества суммаризации.
+        rejected = category == aggregator.CATEGORY_REJECT
         results.append(ProductionResult(pair=p, category=category,
                                         gate_status=gate_status, rejected=rejected))
     log.info("synthetic[B]: прод-прогон завершён — %d пар", len(results))
@@ -794,7 +804,7 @@ def write_excel(path: str, det: Optional[DetectionSummary],
 def run(*, mode: str = "a", limit_cols: Optional[int] = None,
         use_llm: bool = True, profile: Optional[str] = None,
         xlsx_path: Optional[str] = None, excel_out: Optional[str] = None,
-        ref_metrics: bool = False) -> dict:
+        ref_metrics: bool = False, scope: Optional[str] = None) -> dict:
     cases = load_dataset(xlsx_path)
     warnings = check_legend_consistency(cases)
     for w in warnings:
@@ -830,7 +840,7 @@ def run(*, mode: str = "a", limit_cols: Optional[int] = None,
         # сопоставимой по объёму: benign-кандидат ≈ эталон проходит шлюз и судей,
         # critical расходится и отклоняется. См. docstring модуля, режим B.
         pairs_b = build_pairs(cases, reference="gold")
-        prod_results = run_production(pairs_b, panel=panel)
+        prod_results = run_production(pairs_b, panel=panel, scope=scope)
         prod_summary = summarize_production(prod_results)
         print("\n" + render_production(prod_summary))
         out["production"] = prod_summary
@@ -850,6 +860,11 @@ def _build_argparser() -> argparse.ArgumentParser:
                    help="ограничить число клинических случаев (колонок) — для быстрой пробы")
     p.add_argument("--no-llm", action="store_true",
                    help="режим A без LLM-сущностей (только rule-based; режим B всё равно требует LLM)")
+    p.add_argument("--scope", default=None,
+                   help="задача/адресат суммаризации для режима B. Пусто = None "
+                        "(пары «эталон vs искажение» сопоставимы по объёму, сужать нечего). "
+                        "Задавайте тот же scope, что и в прод-прогоне, если хотите мерить "
+                        "ровно прод-конфигурацию шлюза.")
     p.add_argument("--profile", default=None, help="профиль моделей (по умолчанию config.ACTIVE_PROFILE)")
     p.add_argument("--xlsx", default=None, help="путь к xlsx (по умолчанию — автопоиск в materials/)")
     p.add_argument("--excel-out", default=None, help="куда сохранить Excel-отчёт (например reports/synthetic.xlsx)")
@@ -930,6 +945,9 @@ if __name__ == "__main__":
         sys.exit(0)
     _force_utf8_stdout()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+    import gate
+    scope = args.scope or None
+    gate.validate_scope(scope)
     run(mode=args.mode, limit_cols=args.limit_cols, use_llm=not args.no_llm,
         profile=args.profile, xlsx_path=args.xlsx, excel_out=args.excel_out,
-        ref_metrics=args.ref_metrics)
+        ref_metrics=args.ref_metrics, scope=scope)

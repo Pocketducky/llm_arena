@@ -59,6 +59,7 @@ import pandas as pd
 import aggregator
 import audit
 import config
+import gate
 import drift
 import judge
 import report
@@ -329,6 +330,7 @@ if __name__ == "__main__":
         scope = None
     else:
         scope = args.scope
+    gate.validate_scope(scope)   # опечатка в --scope включила бы строгий порог без фильтра
 
     summary = run(limit=args.limit, profile=args.profile, run_id=args.run_id,
                   use_checkpoints=not args.no_checkpoints, scope=scope)

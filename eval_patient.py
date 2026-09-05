@@ -8,15 +8,19 @@ eval_patient.py — финальный сквозной тест на синте
 суммаризация (строки 1..38: эталон + 37 искажённых) сверяется с ИСХОДНИКОМ
 (строка 0) тем же конвейером, что и в проде.
 
-ВАЖНО (см. диагностику): gate со scope=None отклоняет ЛЮБУЮ сжатую
-суммаризацию по entity_recall (она закономерно не покрывает >=50% сущностей
-полного исходника; порог калиброван под scope-aware прод-корпус). Поэтому gate
-здесь — информативный ПЕРВЫЙ ЭТАП (его вердикт и причины фиксируются в отчёте),
-но дискриминацию «лучше/хуже» даёт ЭТАП СУДЕЙ, который мы прогоняем на всех
-кандидатах. Это честно отражено в отчёте.
+SCOPE. Раньше здесь было жёстко зашито scope=None, а прод-прогон
+(run_pipeline.py) шёл со scope="radiologist". Это НЕ разные пороги, а разные
+НАБОРЫ ПРАВИЛ шлюза (см. gate.evaluate_gate): при scope=None работает сырая
+сверка чисел/предикатов по полному объёму источника, при заданном scope —
+проверка покрытия релевантных сущностей. То есть валидировали не то, что
+выполняется в проде. Теперь scope — параметр `--scope`, по умолчанию равный
+config.DATASET_SCOPE, как и в run_pipeline.py.
+
+Шлюз больше НЕ отсекает кандидатов (решение НПКЦ): его вердикт фиксируется в
+отчёте и ограничивает потолок категории в Блоке 5, но судьи прогоняются всегда.
 
 Запуск:
-    python eval_patient.py [--patient Ж1] [--limit-rows N] [--out PREFIX]
+    python eval_patient.py [--patient Ж1] [--scope radiologist] [--limit-rows N] [--out PREFIX]
 """
 
 from __future__ import annotations
@@ -201,7 +205,8 @@ def load_patient(xlsx_path: str, patient: str) -> tuple[str, dict[int, str]]:
 
 
 def evaluate_one(source: str, summary: str, *, row: int, patient: str,
-                 panel: JudgePanel, no_preprocessing: bool = False) -> SummaryEval:
+                 panel: JudgePanel, no_preprocessing: bool = False,
+                 scope: Optional[str] = None) -> SummaryEval:
     """
     Прогон одной пары (исходник, суммаризация-кандидат) через LLM-судей.
 
@@ -224,16 +229,16 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
     if no_preprocessing:
         # Блоки 1-3 отключены — контекст без заземления, gate/объективный слой не считаем.
         gate_status, gate_reasons = "—", []
-        ctx = judge.build_context(source, summary, scope=None, panel=panel, grounded=False)
+        ctx = judge.build_context(source, summary, scope=scope, panel=panel, grounded=False)
         findings: list[str] = []   # объективный слой не применялся
         log.info("  препроцессинг отключён: gate и объективный слой пропущены")
     else:
         # ── Этап 1: pre-evaluation gate ──────────────────────────────
-        gate_decision = gate.evaluate_gate(source, summary, scope=None, panel=panel)
+        gate_decision = gate.evaluate_gate(source, summary, scope=scope, panel=panel)
         gate_status, gate_reasons = gate_decision.status, gate_decision.reason_codes()
         log.info("  gate: %s  причины=%s", gate_status, gate_reasons)
         # ── Этап 2: объективный слой + контекст судей ────────────────
-        ctx = judge.build_context(source, summary, scope=None, panel=panel,
+        ctx = judge.build_context(source, summary, scope=scope, panel=panel,
                                   gate_decision=gate_decision)
         findings = ctx.obj_report.hard_findings()
         log.info("  объективный слой: %d жёстких находок", len(findings))
@@ -295,7 +300,7 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
     try:
         import aggregator
         det = aggregator.finalize({
-            "gate": {"status": None},
+            "gate": {"status": None if no_preprocessing else gate_status},
             "r1": {r: r1[r] for r in roles if r1.get(r) is not None},
             "r2": r2, "r3": r3, "e1_signals": e1_signals,
         })
@@ -444,6 +449,12 @@ def main():
                          "объективный слой, gate); прогнать только судей (R1->R2) и "
                          "финального арбитра (R3). Чекпоинты/вывод — в отдельном "
                          "пространстве, чтобы не смешивать с grounded-прогоном.")
+    ap.add_argument("--scope", default=config.DATASET_SCOPE,
+                    help="задача/адресат суммаризации (по умолчанию — config.DATASET_SCOPE, "
+                         "сейчас %(default)r). ВАЖНО: раньше здесь было жёстко зашито None, "
+                         "и валидация шла по ДРУГОМУ набору правил шлюза, чем прод-прогон "
+                         "run_pipeline.py — то есть проверяли не то, что выполняется в проде. "
+                         "Пустая строка = None (общая сжимающая суммаризация).")
     ap.add_argument("--profile", default=None)
     ap.add_argument("--xlsx", default=None)
     ap.add_argument("--out", default="reports/eval_patient",
@@ -452,6 +463,9 @@ def main():
 
     # Изолируем чекпоинты режима «только LLM-судьи» от grounded-результатов.
     global CKPT_SUBDIR
+    scope = args.scope or None
+    gate.validate_scope(scope)
+
     if args.no_preprocessing:
         CKPT_SUBDIR = "eval_patient_llmonly"
 
@@ -530,7 +544,7 @@ def main():
             continue
         log.info("══ %d/%d (строка %d) ══", i, len(rows), row)
         try:
-            results.append(evaluate_one(source, summaries[row], row=row,
+            results.append(evaluate_one(source, summaries[row], row=row, scope=scope,
                                         patient=args.patient, panel=panel,
                                         no_preprocessing=args.no_preprocessing))
         except Exception as e:  # noqa: BLE001 — длинный прогон не должен падать целиком

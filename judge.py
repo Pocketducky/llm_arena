@@ -962,12 +962,23 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
     """
     panel = panel or JudgePanel(profile)
 
-    # Шлюз считаем ПЕРВЫМ, отдельно от остального контекста: если он
-    # отклоняет пару, дальше вообще не нужно строить ObjectiveComparisonReport
-    # (а это отдельные LLM-вызовы извлечения сущностей в objective_layer,
-    # помимо тех, что уже делает сам шлюз) — иначе «экономия GPU-времени»,
-    # ради которой и вводится pre-evaluation gate (Блок 3 плана), не работает:
-    # к моменту проверки status мы бы уже потратили вызовы на ненужный отчёт.
+    # Шлюз считаем ПЕРВЫМ, отдельно от остального контекста: его вердикт и
+    # покрытие нужны как заземление для судей и для отчёта.
+    #
+    # ШЛЮЗ БОЛЬШЕ НЕ ОТСЕКАЕТ ПАРЫ (решение НПКЦ). Прежде status=="reject"
+    # означал немедленное «Неприемлемо» с пустыми r1/r2/r3 — то есть худшую
+    # клиническую категорию БЕЗ единого свидетельства от судей. Это было
+    # опасно, потому что ложные отказы шлюза массовые и измеримые: на
+    # синтетическом наборе rule-based часть давала 77 reject из 380 пар (20 %),
+    # а у пациентов М3 и Ж4 — 38/38, включая ЭТАЛОННУЮ строку, по правилу
+    # «упомянуто хотя бы раз» без допуска на сжатие 3.4:1. В прод-корпусе к
+    # этому добавлялось то, что сущности источника извлекались лишь из первых
+    # 6000 символов карты (медиана исходника — 21107 символов).
+    #
+    # Теперь reject лишь опускает потолок категории в aggregator._decide, а
+    # причина отказа целиком уходит в отчёт. Единственное исключение —
+    # вырожденный вход (пустой текст, не тот язык): там оценивать нечего, см.
+    # gate._degenerate_input_reasons.
     gate_decision = gate.evaluate_gate(source_text, summary_text, scope=scope,
                                         panel=panel, entity_role="judge_1")
 
@@ -975,25 +986,29 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
     log.info("  ЭМК: %s | Модель: %s | scope=%s | gate=%s",
              emr_id, model_id, scope, gate_decision.status)
     log.info("═" * 60)
+    if gate_decision.status != "pass":
+        log.info("  Шлюз: %s (%s) — оценка ПРОДОЛЖАЕТСЯ, вердикт шлюза учтён "
+                 "как сигнал в Блоке 5", gate_decision.status,
+                 ", ".join(gate_decision.reason_codes()) or "без причин")
 
-    if gate_decision.status == "reject":
-        log.info("  Шлюз: reject (%s) — основная оценка не запускается (Блок 3)",
-                 gate_decision.reason_codes())
+    if gate_decision.is_degenerate():
+        # Пустая/иноязычная суммаризация: судить нечего, и LLM-вызовы здесь —
+        # чистая трата GPU. Это НЕ «плохая суммаризация», а негодный вход.
+        log.warning("  Шлюз: вырожденный вход (%s) — судьи не запускаются",
+                    ", ".join(gate_decision.reason_codes()))
         return {
-            "emr_id": emr_id, "model_id": model_id,
-            "scope": scope,
+            "emr_id": emr_id, "model_id": model_id, "scope": scope,
             "category": "Неприемлемо",
-            "verdict": "Отклонена pre-evaluation gate (Блок 3) до основной "
-                       f"оценки: {', '.join(gate_decision.reason_codes())}",
+            "verdict": "Вырожденный вход: "
+                       f"{'; '.join(r.message for r in gate_decision.reasons if r.degenerate)}",
             "e1_signals": {"raised_by_judges": [], "aggregator_flagged": False,
                            "aggregator_named": [], "aggregator_category": None,
                            "consistent": True},
             "gate": {"status": gate_decision.status,
-                     "reasons": gate_decision.reason_codes()},
-            # Объективный отчёт (ObjectiveComparisonReport) здесь сознательно
-            # НЕ строится — экономия GPU/времени, см. комментарий выше про
-            # gate.evaluate_gate. None — не «забыли посчитать», а «отклонено
-            # ДО точки, где это считается»; явно отражаем это в audit-логе.
+                     "reasons": gate_decision.reason_codes(),
+                     "messages": [r.message for r in gate_decision.reasons],
+                     "degenerate": True,
+                     "coverage": gate_decision.coverage},
             "objective": None,
             "r1": {}, "r2": {}, "r3": {},
         }
@@ -1068,7 +1083,14 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
         "verdict": r3.get("verdict", ""),
         "summary_by_block": r3.get("summary_by_block", {}),
         "e1_signals": e1_signals,
-        "gate": {"status": ctx.gate_decision.status, "reasons": ctx.gate_decision.reason_codes()},
+        # coverage (счётчики чисел/предикатов, entity-отчёт, schema_note) раньше
+        # терялся ровно здесь: наружу шли только status и коды причин, из-за чего
+        # в отчёте нельзя было понять, ПОЧЕМУ шлюз решил именно так.
+        "gate": {"status": ctx.gate_decision.status,
+                 "reasons": ctx.gate_decision.reason_codes(),
+                 "messages": [r.message for r in ctx.gate_decision.reasons],
+                 "degenerate": False,
+                 "coverage": ctx.gate_decision.coverage},
         # Блок 7 — «объективные метрики рядом с LLM-оценками»: компактное
         # резюме фактологической сверки (Блок 2), не зависящее от мнения
         # судей — числа/единицы/полярность/сущности с precision-recall-F1.
