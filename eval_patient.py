@@ -46,10 +46,14 @@ from synthetic import ROW_DISTORTIONS, SHEET_NAME, ROW_LABEL_COL  # легенд
 log = logging.getLogger("eval_patient")
 
 # Порядок предпочтения итоговых категорий (для ранжирования)
+# Порядок предпочтения при ранжировании. Служебные статусы («Оценка неполна»,
+# «ошибка») стоят НИЖЕ клинических: это отсутствие результата, а не плохой
+# результат, и в топе ранжирования им делать нечего.
 CATEGORY_RANK = {
     "Готово к клиническому применению": 3,
     "Требует редактирования": 2,
     "Неприемлемо": 1,
+    "Оценка неполна": 0,
     "ошибка": 0,
 }
 
@@ -77,6 +81,12 @@ class SummaryEval:
     block_pass: dict[str, str]      # {"A": "3/3", ...} — сколько подкритериев pass
     objective_findings: list[str]
     verdict: str
+    # Трасса решения Блока 5 и самооценка арбитра R3 — для отчёта: по ним видно
+    # ПОЧЕМУ выставлена категория и расходится ли код с мнением модели.
+    decision_path: list[str] = field(default_factory=list)
+    llm_category: str = ""
+    e1_details: dict = field(default_factory=dict)
+    telemetry: dict = field(default_factory=dict)
 
     @property
     def n_objective(self) -> int:
@@ -135,6 +145,11 @@ def _load_checkpoint(patient: str, row: int) -> Optional["SummaryEval"]:
             chars=d["chars"], gate_status=d["gate_status"], gate_reasons=d["gate_reasons"],
             category=d["category"], e1_triggered=d["e1"], block_pass=d["block_pass"],
             objective_findings=d["objective_findings"], verdict=d["verdict"],
+            # Поля появились в v2; старые чекпоинты их не содержат — читаем мягко,
+            # чтобы прерванный прогон можно было продолжить, а не пересчитывать.
+            decision_path=d.get("decision_path", []),
+            llm_category=d.get("llm_category", ""),
+            e1_details=d.get("e1_details", {}),
         )
     except (json.JSONDecodeError, KeyError, OSError):
         return None
@@ -284,7 +299,7 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
         r3 = {"category": "ошибка", "e1_triggered": False, "verdict": str(e),
               "summary_by_block": {}}
 
-    e1_signals = judge._collect_e1_signals(r1, r2, r3)
+    e1_signals = judge._collect_e1_signals(r1, r2, r3, summary)
     e1 = bool(e1_signals["aggregator_flagged"] or e1_signals["raised_by_judges"])
 
     # Подсчёт пройденных подкритериев по уточнённым (R2) отчётам — мажоритарно по
@@ -293,27 +308,39 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
     block_pass = {block: _block_pass_majority(final_reports, block, subs)
                   for block, subs in judge.TAXONOMY.items()}
 
-    category = r3.get("category", "—")
-
-    # Для сверки/аудита — детерминированный итог Блока 5 (aggregator.finalize)
-    # поверх тех же голосов судей. Первичным считаем арбитра R3; это лишь лог.
+    # ИТОГОВУЮ категорию выносит ДЕТЕРМИНИРОВАННЫЙ агрегатор (Блок 5), а не
+    # самооценка арбитра R3. Раньше здесь было наоборот: первичной считалась
+    # категория R3, а aggregator.finalize вызывался «для сверки» и только
+    # писался в лог. Это расходилось и с проектным решением («единственный
+    # источник итоговой категории — прозрачный воспроизводимый код»), и с
+    # прод-прогоном run_pipeline.py, где авторитетен именно агрегатор, — то
+    # есть валидация мерила не тот механизм, который работает в проде.
+    import aggregator
+    llm_category = r3.get("category", "—")
     try:
-        import aggregator
         det = aggregator.finalize({
             "gate": {"status": None if no_preprocessing else gate_status},
             "r1": {r: r1[r] for r in roles if r1.get(r) is not None},
             "r2": r2, "r3": r3, "e1_signals": e1_signals,
         })
-        log.info("  [сверка] детерминированный агрегатор (Блок 5): %s", det.get("category"))
-    except Exception as agg_err:  # noqa: BLE001 — сверка не должна ронять прогон
-        log.debug("  детерминированная сверка недоступна: %s", agg_err)
+        category = det.get("category", llm_category)
+        decision_path = det.get("decision_path", [])
+        if category != llm_category:
+            log.info("  [расхождение] код: %s | самооценка R3: %s", category, llm_category)
+    except Exception as agg_err:  # noqa: BLE001 — агрегация не должна ронять прогон
+        log.exception("  детерминированная агрегация упала (%s) — беру категорию R3", agg_err)
+        category, decision_path = llm_category, [f"агрегация упала: {agg_err}"]
+    else:
+        e1 = bool(det.get("e1_triggered", e1))
 
     log.info("  ИТОГ row %d: %s%s  (%.0f с)", row, category, "  [E1!]" if e1 else "",
              time.time() - t0)
 
     result = SummaryEval(row, dtype, severity, len(summary), gate_status,
                          gate_reasons, category, e1, block_pass,
-                         findings, r3.get("verdict", ""))
+                         findings, r3.get("verdict", ""),
+                         decision_path=decision_path, llm_category=llm_category,
+                         e1_details=e1_signals)
 
     # чекпоинт на диск (переживает перезапуск)
     ckpt = _ckpt_dir() / f"{patient}__row{row}.json"
@@ -323,6 +350,8 @@ def evaluate_one(source: str, summary: str, *, row: int, patient: str,
         "gate_status": result.gate_status, "gate_reasons": result.gate_reasons,
         "category": category, "e1": e1, "block_pass": block_pass,
         "objective_findings": findings, "verdict": result.verdict,
+        "decision_path": decision_path, "llm_category": llm_category,
+        "e1_details": e1_signals,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
 

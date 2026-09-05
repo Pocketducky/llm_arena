@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import re
+
 import config
 import preprocessor
 import objective_layer
@@ -904,28 +906,118 @@ def score_round3(panel: JudgePanel, role: str, ctx: JudgeContext,
     )
 
 
-def _collect_e1_signals(r1: dict[str, dict], r2: dict[str, dict], r3: dict) -> dict:
-    """
-    Прозрачно фиксирует ВСЕ сигналы E1 из всех источников (оба раунда
-    рецензентов + явный, запрошенный промптом ответ агрегатора).
+def _citation_supported(citation: str, summary_text: str) -> bool:
+    """Действительно ли приведённый судьёй «опасный фрагмент» есть в суммаризации.
 
-    Это НЕ финальное решение — Блок 4 лишь делает проверку E1
-    «не-опциональной» внутри агрегаторского промпта (см. PROMPT_AGGREGATE,
-    шаг 1) и честно собирает её результаты. Превратить эти сигналы в
-    железобетонную, не зависящую от добросовестности LLM гарантию
-    («если E1 поднят кем угодно — категория ВСЕГДА «Неприемлемо», код
-    это проверяет сам, а не верит агрегатору на слово») — задача Блока 5
-    («Полностью убираем... Новый агрегатор — чистый детерминированный
-    код: 1. Проверка stop-rule E1 первым шагом»).
+    Проверяет КОД, а не LLM: сопоставление по стемам значимых токенов
+    (objective_layer._stem_overlap) — судья цитирует в именительном падеже, в
+    тексте падеж косвенный. Короткая цитата обязана совпасть целиком; для
+    длинной достаточно 80 % значимых токенов — иначе любая перестановка слов
+    рушила бы законное срабатывание предохранителя.
     """
-    raised_by = [role for role, rep in {**r1, **r2}.items()
-                 if isinstance(rep, dict) and rep.get("E", {}).get("E1", {}).get("pass") is False]
+    if not citation or not summary_text:
+        return False
+    cit = objective_layer._normalize_entity(str(citation))
+    txt = objective_layer._normalize_entity(summary_text)
+    text_tokens = re.findall(r"[а-яёa-z0-9]+", txt)
+    if not text_tokens:
+        return False
+    toks = [t for t in re.findall(r"[а-яёa-z0-9]+", cit) if len(t) >= 3]
+    if not toks:
+        return False
+    hits = sum(1 for t in toks
+               if any(objective_layer._stem_overlap(t, tt) for tt in text_tokens))
+    need = len(toks) if len(toks) <= 4 else int(len(toks) * 0.8 + 0.999)
+    return hits >= need
+
+
+def _e1_citations(report: dict) -> list[str]:
+    """Фрагменты, которые судья назвал клинически опасными (поле danger_examples)."""
+    e1 = ((report or {}).get("E") or {}).get("E1")
+    if not isinstance(e1, dict):
+        return []
+    raw = e1.get("danger_examples")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
+def _collect_e1_signals(r1: dict[str, dict], r2: dict[str, dict], r3: dict,
+                        summary_text: str = "") -> dict:
+    """
+    Собирает сигналы стоп-правила E1 из всех источников и решает, какие из них
+    ЗАСЧИТЫВАЮТСЯ.
+
+    ПОЧЕМУ появилась проверка цитатой. В v1 правило было чистой дизъюнкцией:
+    флаг любого из четырёх источников (3 судьи после merge R1/R2 + агрегатор R3)
+    необратимо фиксировал «Неприемлемо», причём `aggregator_flagged` — это
+    невалидированный булев флаг ОДНОГО LLM-вызова. Результат на пилоте: E1
+    срабатывал в 38 случаях из 38, включая эталонную суммаризацию и benign-
+    искажения уровня опечатки и пунктуации. Предохранитель, срабатывающий
+    всегда, не несёт информации.
+
+    Теперь голос судьи засчитывается, только если он привёл КОНКРЕТНЫЙ фрагмент
+    суммаризации как опасный И этот фрагмент в ней действительно есть (проверяет
+    код). Флаг агрегатора сам по себе больше не триггер: он усиливает голос
+    судьи, но в одиночку лишь помечает расхождение (disputed_by_aggregator),
+    которое видно в отчёте.
+
+    Отключается через config.E1_REQUIRE_CITATION=0 — тогда поведение прежнее
+    (нужно для A/B-сравнения на синтетике).
+    """
+    final = {**r1, **r2}          # финальная позиция каждого судьи (R2 важнее R1)
+
+    raised_all: list[str] = []
+    confirmed: list[str] = []
+    citations: dict[str, list[str]] = {}
+    rejected_citations: dict[str, list[str]] = {}
+
+    for role, rep in final.items():
+        if not isinstance(rep, dict):
+            continue
+        if ((rep.get("E") or {}).get("E1") or {}).get("pass") is not False:
+            continue
+        raised_all.append(role)
+        quotes = _e1_citations(rep)
+        good = [q for q in quotes if _citation_supported(q, summary_text)]
+        bad = [q for q in quotes if q not in good]
+        if good:
+            confirmed.append(role)
+            citations[role] = good
+        if bad:
+            rejected_citations[role] = bad
+
+    raised_all.sort()
+    confirmed.sort()
+    aggregator_raw = bool(r3.get("e1_triggered", False))
+
+    if config.E1_REQUIRE_CITATION:
+        effective_judges = confirmed
+        # Флаг агрегатора засчитывается только вместе с голосом хотя бы одного
+        # судьи: два независимых источника, а не один невалидированный булев.
+        effective_aggregator = aggregator_raw and bool(raised_all)
+        disputed = aggregator_raw and not raised_all
+    else:
+        effective_judges = raised_all
+        effective_aggregator = aggregator_raw
+        disputed = False
+
     return {
-        "raised_by_judges": raised_by,
-        "aggregator_flagged": bool(r3.get("e1_triggered", False)),
+        "raised_by_judges": effective_judges,
+        "aggregator_flagged": effective_aggregator,
         "aggregator_named": list(r3.get("e1_triggered_by", [])),
         "aggregator_category": r3.get("category"),
-        "consistent": bool(raised_by) == bool(r3.get("e1_triggered", False)),
+        "consistent": bool(effective_judges) == aggregator_raw,
+        # ── диагностика для отчёта ────────────────────────────────
+        "require_citation": bool(config.E1_REQUIRE_CITATION),
+        "raised_by_judges_raw": raised_all,
+        "raised_without_citation": sorted(set(raised_all) - set(confirmed)),
+        "citations": citations,
+        "unverifiable_citations": rejected_citations,
+        "aggregator_raw_flag": aggregator_raw,
+        "disputed_by_aggregator": disputed,
     }
 
 
@@ -1066,7 +1158,7 @@ def evaluate_summary(source_text: str, summary_text: str, emr_id: str, model_id:
         r3 = {"category": "ошибка", "e1_triggered": False, "e1_triggered_by": [],
               "verdict": f"Агрегатор недоступен: {e}", "summary_by_block": {}}
 
-    e1_signals = _collect_e1_signals(r1, r2, r3)
+    e1_signals = _collect_e1_signals(r1, r2, r3, ctx.summary_text)
     if not e1_signals["consistent"]:
         log.warning("    НЕСОГЛАСОВАННОСТЬ E1: рецензенты подняли флаг %s, "
                     "агрегатор aggregator_flagged=%s — требует ручной проверки "
