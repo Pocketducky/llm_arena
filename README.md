@@ -86,8 +86,21 @@ repo/
 ## Тесты (офлайн, без LLM)
 
 ```bash
-python tests/test_json_robustness.py   # устойчивость к «грязному»/оборванному JSON
-python tests/test_vllm_client.py        # форма запросов vLLM/Ollama (с моком сети)
+python tests/test_json_robustness.py       # устойчивость к «грязному» JSON
+python tests/test_truncation.py            # обрыв ответа по лимиту токенов и телеметрия
+python tests/test_aggregator_decisions.py  # решающий путь: сбой != клинический вердикт
+python tests/test_gate_rules.py            # правила шлюза и вырожденный вход
+python tests/test_e1_citation.py           # стоп-правило E1 требует проверяемую цитату
+python tests/test_objective_grounding.py   # заземление судей и длинные ЭМК
+python tests/test_vllm_client.py           # форма запросов vLLM/Ollama (с моком сети)
+```
+
+Плюс самопроверки без сети:
+
+```bash
+python run_pipeline.py --dry-run   # проводка judge -> aggregator -> audit -> report -> drift
+python synthetic.py --self-check   # легенда, загрузка набора, rule-based детекция
+python gate.py --self-check        # правила шлюза на реальных парах
 ```
 
 ## Точки входа
