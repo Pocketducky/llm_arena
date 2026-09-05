@@ -519,8 +519,6 @@ def _block_skeleton(block: str, *, with_lists: bool = True) -> str:
     for c in TAXONOMY[block]:
         if block == "B":
             parts.append(f'"{c}": {{"pass": true, "comment": "", "missing": []}}')
-        elif c == "A1" or c in ("D2",):
-            parts.append(f'"{c}": {{"pass": true, "comment": ""}}')
         elif c == "C1":
             parts.append(f'"{c}": {{"pass": true, "comment": "", "irrelevant_items": []}}')
         elif c == "D2":
@@ -533,6 +531,39 @@ def _block_skeleton(block: str, *, with_lists: bool = True) -> str:
     if with_lists and extra_lists.get(block):
         body += ", " + extra_lists[block]
     return "{" + body + "}"
+
+
+def _block_token_budget(block: str) -> int:
+    """Бюджет ответа под конкретный блок.
+
+    Блоки B и E объёмнее остальных: B требует 5 подкритериев, каждый со вложенным
+    списком `missing`, E — 3 подкритерия плюс `danger_examples`. При едином
+    бюджете 1536 именно блок B стабильно обрывался на B4/B5 (все 11 провалов
+    валидации R1 в логе пилота — ровно этот случай)."""
+    return config.TOKENS_R1_LARGE if block in ("B", "E") else config.TOKENS_R1
+
+
+def _validate_full_report(parsed: dict, raw: str) -> None:
+    """Проверка полного отчёта A-E (раунд 2).
+
+    Раньше R2 вызывался с validate_fn=None: любой распарсившийся ответ, включая
+    собранный салважем огрызок, принимался молча. Обрыв не отличался от честного
+    «после ревью согласен с собой». Теперь неполный ответ уходит в повтор (и, по
+    новой логике ask_json, — с увеличенным бюджетом); если все попытки исчерпаны,
+    score_round2 по-прежнему возвращает отчёт R1 без изменений.
+    """
+    missing: list[str] = []
+    for block, codes in TAXONOMY.items():
+        blk = parsed.get(block)
+        if not isinstance(blk, dict):
+            missing.append(block)
+            continue
+        for code in codes:
+            sub = blk.get(code)
+            if not isinstance(sub, dict) or not isinstance(sub.get("pass"), bool):
+                missing.append(f"{block}.{code}")
+    if missing:
+        raise ValueError("неполный отчёт R2, не хватает: " + ", ".join(missing[:8]))
 
 
 def _validate_block(block: str):
@@ -548,14 +579,32 @@ def _validate_block(block: str):
 
 
 def _fallback_block_prompt(block: str, summary_text: str):
+    """Упрощённый промпт для поздних попыток.
+
+    ВАЖНО про предвзятость: скелет предзаполнен `"pass": true`, а всё заземление
+    (исходник ЭМК, находки объективного слоя, решение шлюза) из промпта убрано —
+    судья, ответивший здесь, НИЧЕГО не сверял с источником. Факт использования
+    fallback считается в телеметрии (llm_client.CallStats.fallback_used) и
+    выводится в отчёт, чтобы такие голоса были видны, а не растворялись среди
+    полноценных.
+
+    Попытки различаются по содержанию: раньше 3-я и 4-я были побайтово
+    одинаковыми запросами при temperature≈0 — то есть одна из четырёх попыток
+    тратилась заведомо впустую.
+    """
     skeleton = _block_skeleton(block)
 
     def _fallback(attempt: int, last_raw: str) -> str:
-        return (f"Заполни JSON-структуру оценки блока {block} таксономии качества "
+        base = (f"Заполни JSON-структуру оценки блока {block} таксономии качества "
                 f"медицинских суммаризаций. Для каждого подкритерия укажи pass "
                 f"(true — критерий выполнен, false — нарушен) и краткий comment.\n\n"
-                f"Суммаризация:\n{_truncate(summary_text, 2000)}\n\n"
-                f"Верни ТОЛЬКО JSON по структуре:\n{skeleton}")
+                f"Суммаризация:\n{_truncate(summary_text, 2000)}\n\n")
+        if attempt >= 4:
+            # Последняя попытка: максимально короткий ответ, без комментариев —
+            # цель уже не качество разбора, а хоть какой-то валидный вердикт.
+            base += ("Отвечай МАКСИМАЛЬНО КРАТКО: comment — не более 5 слов.\n"
+                     "Предыдущие попытки вернули неразбираемый ответ.\n\n")
+        return base + f"Верни ТОЛЬКО JSON по структуре:\n{skeleton}"
     return _fallback
 
 
@@ -595,7 +644,7 @@ def score_block(panel: JudgePanel, role: str, block: str, ctx: JudgeContext) -> 
         return panel.ask_json(
             role, prompt, desc=f"R1 блок {block} ({BLOCK_TITLES_RU[block]})",
             max_attempts=4, validate_fn=_validate_block(block), think=False,
-            num_predict=1536,
+            num_predict=_block_token_budget(block),
             fallback_prompt_fn=_fallback_block_prompt(block, ctx.summary_text),
         )
     except LLMError as e:
@@ -731,7 +780,8 @@ def score_round2(panel: JudgePanel, role: str, ctx: JudgeContext,
     try:
         revised = panel.ask_json(
             role, prompt, desc="R2 пересмотр (полные отчёты коллег)",
-            max_attempts=2, validate_fn=None, think=False, num_predict=2048,
+            max_attempts=3, validate_fn=_validate_full_report, think=False,
+            num_predict=config.TOKENS_R2,
         )
     except LLMError as e:
         log.warning("      %s R2: модель не вернула парсимый JSON (%.80s) — "
@@ -848,7 +898,8 @@ def score_round3(panel: JudgePanel, role: str, ctx: JudgeContext,
     )
     return panel.ask_json(
         role, prompt, desc="R3 финальная агрегация (явная проверка E1)",
-        max_attempts=3, validate_fn=_validate_aggregate, think=False, num_predict=1536,
+        max_attempts=3, validate_fn=_validate_aggregate, think=False,
+        num_predict=config.TOKENS_R3,
         fallback_prompt_fn=_fallback_aggregate_prompt(ctx.summary_text),
     )
 

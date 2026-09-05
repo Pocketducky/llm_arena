@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+import config
 import preprocessor
 from objective_layer import (
     NumericFact, PolarityFact, ENTITY_CATEGORIES,
@@ -334,7 +335,7 @@ def filter_relevant_entities(panel, entities: dict[str, list[str]], scope: str,
 
     result = panel.ask_json(
         role, prompt_template.format(lists=lists),
-        desc=desc, max_attempts=2,
+        desc=desc, max_attempts=3, num_predict=config.TOKENS_ENTITIES,
         # think=False — это чисто экстрактивная/фильтрующая задача (отобрать
         # релевантные пункты из уже извлечённых списков), рассуждения тут не
         # нужны и не помогают. На qwen3:8b (Ollama 0.24) скрытые <think>-токены

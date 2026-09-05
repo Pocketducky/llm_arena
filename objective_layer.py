@@ -37,10 +37,13 @@ objective_layer.py — объективный слой: извлечение п�
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Optional
+
+import config
 
 # ══════════════════════════════════════════════════════════════════
 # 1. ЧИСЛОВЫЕ ФАКТЫ С ЕДИНИЦАМИ ИЗМЕРЕНИЯ
@@ -336,7 +339,8 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
     result = panel.ask_json(
         role,
         _ENTITY_EXTRACTION_PROMPT.format(text=text[:6000]),
-        desc=desc, validate_fn=_validate, max_attempts=2,
+        desc=desc, validate_fn=_validate, max_attempts=3,
+        num_predict=config.TOKENS_ENTITIES,
         # think=False — критично для «мыслящих» моделей семейства qwen3:
         # диагностировано прямым вызовом Ollama (тот же промпт), что при их
         # поведении по умолчанию (think включён даже с format="json") скрытые

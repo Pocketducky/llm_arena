@@ -20,8 +20,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
-from typing import Callable, Optional
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Callable, Iterator, Optional
 
 import requests
 
@@ -31,11 +34,102 @@ log = logging.getLogger("llm_client")
 
 
 class LLMError(RuntimeError):
-    """LLM-бэкенд недоступен, модель не обслуживается или не вернула пригодный ответ."""
+    """LLM-бэкенд недоступен, модель не обслуживается или не вернула пригодный ответ.
+
+    `retryable` разделяет два принципиально разных случая:
+      • False — сервер недоступен / модель не обслуживается. Повторять бессмысленно,
+        ошибка должна всплыть немедленно (иначе на мёртвом сервере мы сделаем
+        3 попытки ask_json x 3 попытки generate = 9 бесполезных ожиданий таймаута);
+      • True  — таймаут или HTTP 400 (типично: промпт не влез в max_model_len).
+        Здесь имеет смысл дойти до УПРОЩЁННОГО fallback-промпта, который короче
+        основного. Раньше LLMError всегда обходил лестницу повторов ask_json
+        (там ловились только JSONDecodeError/ValueError), и fallback-промпт был
+        недостижим ровно в тех случаях, ради которых его писали.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+class TruncatedResponse(ValueError):
+    """Модель упёрлась в лимит длины ответа и оборвала генерацию на середине.
+
+    Наследуется от ValueError, чтобы попасть в уже существующую ветку повторов
+    ask_json. Несёт частичный текст: он нужен для диагностики и для лога, но
+    НЕ используется как валидный результат — раньше именно такой оборванный
+    ответ уходил в салваж и молча превращался в неполный отчёт судьи.
+    """
+
+    def __init__(self, message: str, *, partial: str = "", model: str = "", limit: int = 0):
+        super().__init__(message)
+        self.partial = partial
+        self.model = model
+        self.limit = limit
 
 
 # Обратная совместимость: прежнее имя исключения (код ловит `OllamaError`).
 OllamaError = LLMError
+
+
+# ══════════════════════════════════════════════════════════════════
+# ТЕЛЕМЕТРИЯ ВЫЗОВОВ
+# ══════════════════════════════════════════════════════════════════
+# Раньше всё это существовало только как строки в stdout: по итоговому Excel
+# нельзя было отличить «судьи нашли проблемы» от «мы не смогли разобрать ответ
+# судьи». Счётчики собираются по паре (collect_telemetry) и попадают на лист
+# «Диагностика прогона».
+
+@dataclass
+class CallStats:
+    """Счётчики LLM-вызовов за один скоуп (обычно — одна пара ЭМК/суммаризация)."""
+    calls: int = 0                  # успешных HTTP-ответов от модели
+    attempts: int = 0               # попыток ask_json (включая повторные)
+    truncated: int = 0              # ответов с finish_reason == "length"
+    timeouts: int = 0
+    http_errors: int = 0
+    conn_errors: int = 0
+    salvaged: int = 0               # раз, когда JSON собран салважем
+    salvaged_keys: int = 0
+    repaired: int = 0               # раз, когда JSON разобран только после repair_json
+    truncation_repaired: int = 0    # из них — с дописыванием незакрытых скобок (=обрыв)
+    fallback_used: int = 0          # попыток с упрощённым промптом (без заземления)
+    budget_raised: int = 0          # раз, когда бюджет токенов поднимался после обрыва
+    json_failures: int = 0          # ответов, не прошедших парсинг/валидацию
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    seconds: float = 0.0
+    notes: list = field(default_factory=list)   # человекочитаемые события
+
+    def note(self, text: str) -> None:
+        if len(self.notes) < 200:        # страховка от разрастания на длинных прогонах
+            self.notes.append(text)
+
+    def as_dict(self) -> dict:
+        d = {k: v for k, v in self.__dict__.items() if k != "notes"}
+        d["notes"] = list(self.notes)
+        return d
+
+
+# Хранилище — thread-local: run_pipeline обрабатывает пары параллельно
+# (config.CONCURRENCY), и счётчики не должны перемешиваться между потоками.
+_TLS = threading.local()
+
+
+def _stats() -> Optional[CallStats]:
+    return getattr(_TLS, "stats", None)
+
+
+@contextmanager
+def collect_telemetry() -> Iterator[CallStats]:
+    """Собрать статистику всех LLM-вызовов внутри блока `with`."""
+    prev = getattr(_TLS, "stats", None)
+    st = CallStats()
+    _TLS.stats = st
+    try:
+        yield st
+    finally:
+        _TLS.stats = prev
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -157,27 +251,53 @@ def _generate_ollama(model_name, prompt, *, force_json, think, temperature,
         payload["think"] = think
 
     last_exc: Optional[Exception] = None
+    st = _stats()
     for attempt in range(1, max_timeout_retries + 2):
+        t0 = time.monotonic()
         try:
             r = requests.post(config.OLLAMA_GENERATE_URL, json=payload, timeout=timeout)
             r.raise_for_status()
             resp = r.json()
-            used = resp.get("prompt_eval_count", "?")
-            log.debug("        %s: токенов %s/%s%s", model_name, used, num_ctx,
+            text = resp.get("response") or ""
+            if st is not None:
+                st.calls += 1
+                st.seconds += time.monotonic() - t0
+                st.prompt_tokens += int(resp.get("prompt_eval_count") or 0)
+                st.completion_tokens += int(resp.get("eval_count") or 0)
+            log.debug("        %s: токенов %s/%s%s", model_name,
+                      resp.get("prompt_eval_count", "?"), num_ctx,
                       " [JSON mode]" if force_json else "")
-            return resp["response"]
+            # Признак обрыва Ollama отдаёт в done_reason ("stop" | "length").
+            # Раньше он просто игнорировался, и обрыв обнаруживался лишь косвенно —
+            # когда JSON не парсился (а после дописывания скобок в repair_json
+            # мог и не обнаружиться вовсе).
+            if str(resp.get("done_reason") or "").lower() == "length":
+                if st is not None:
+                    st.truncated += 1
+                    st.note(f"обрыв по лимиту: {model_name}, num_predict={num_predict}")
+                raise TruncatedResponse(
+                    f"ответ оборван по лимиту num_predict={num_predict}",
+                    partial=text, model=model_name, limit=num_predict)
+            return text
         except requests.exceptions.Timeout as e:
             last_exc = e
+            if st is not None:
+                st.timeouts += 1
+                st.seconds += time.monotonic() - t0
             log.warning("        таймаут (%s) попытка %d/%d",
                         model_name, attempt, max_timeout_retries + 1)
             if attempt <= max_timeout_retries:
                 time.sleep(config.RETRY_SLEEP_SECONDS)
         except requests.exceptions.ConnectionError as e:
+            if st is not None:
+                st.conn_errors += 1
             raise LLMError(f"Ollama недоступна по адресу {config.OLLAMA_HOST} "
-                           f"при обращении к модели '{model_name}'.") from e
+                           f"при обращении к модели '{model_name}'.",
+                           retryable=False) from e
 
     raise LLMError(f"Модель '{model_name}' не ответила за отведённое время "
-                   f"после {max_timeout_retries + 1} попыток") from last_exc
+                   f"после {max_timeout_retries + 1} попыток",
+                   retryable=True) from last_exc
 
 
 def _generate_vllm(model_name, prompt, *, force_json, think, temperature,
@@ -198,6 +318,8 @@ def _generate_vllm(model_name, prompt, *, force_json, think, temperature,
         "max_tokens": max_tokens,
         "stream": False,
     }
+    if config.SEED is not None:
+        payload["seed"] = config.SEED      # воспроизводимость прогона
     if force_json:
         payload["response_format"] = {"type": "json_object"}
     if config.VLLM_ENABLE_THINKING:
@@ -209,36 +331,72 @@ def _generate_vllm(model_name, prompt, *, force_json, think, temperature,
                "Content-Type": "application/json"}
 
     last_exc: Optional[Exception] = None
+    st = _stats()
     for attempt in range(1, max_timeout_retries + 2):
+        t0 = time.monotonic()
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=timeout)
             r.raise_for_status()
             data = r.json()
             choice = (data.get("choices") or [{}])[0]
             content = ((choice.get("message") or {}).get("content")) or ""
-            usage = (data.get("usage") or {}).get("total_tokens", "?")
-            log.debug("        %s: vLLM ok (токенов %s)%s", model_name, usage,
+            usage = data.get("usage") or {}
+            if st is not None:
+                st.calls += 1
+                st.seconds += time.monotonic() - t0
+                st.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+                st.completion_tokens += int(usage.get("completion_tokens") or 0)
+            log.debug("        %s: vLLM ok (токенов %s)%s", model_name,
+                      usage.get("total_tokens", "?"),
                       " [JSON mode]" if force_json else "")
+            # finish_reason == "length" — модель упёрлась в max_tokens. Раньше
+            # это поле не читалось вовсе, и оборванный ответ шёл в парсер как
+            # обычный: repair_json дописывал закрывающие скобки, и часть обрывов
+            # становилась «валидным» JSON с молча потерянными подкритериями.
+            if str(choice.get("finish_reason") or "").lower() == "length":
+                if st is not None:
+                    st.truncated += 1
+                    st.note(f"обрыв по лимиту: {model_name}, max_tokens={max_tokens}")
+                raise TruncatedResponse(
+                    f"ответ оборван по лимиту max_tokens={max_tokens}",
+                    partial=content, model=model_name, limit=max_tokens)
             return content
         except requests.exceptions.Timeout as e:
             last_exc = e
+            if st is not None:
+                st.timeouts += 1
+                st.seconds += time.monotonic() - t0
             log.warning("        таймаут (%s) попытка %d/%d",
                         model_name, attempt, max_timeout_retries + 1)
             if attempt <= max_timeout_retries:
                 time.sleep(config.RETRY_SLEEP_SECONDS)
         except requests.exceptions.ConnectionError as e:
+            if st is not None:
+                st.conn_errors += 1
             raise LLMError(f"vLLM недоступен по адресу {endpoint} при обращении "
-                           f"к модели '{model_name}'.") from e
+                           f"к модели '{model_name}'.", retryable=False) from e
         except requests.exceptions.HTTPError as e:
             body = getattr(getattr(e, "response", None), "text", "") or ""
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if st is not None:
+                st.http_errors += 1
+                st.note(f"HTTP {status} от {model_name}: {body[:120]}")
+            # 400 у vLLM — почти всегда «промпт + max_tokens > max_model_len».
+            # Такой запрос стоит повторить УКОРОЧЕННЫМ промптом (fallback), а не
+            # ронять всю пару, поэтому помечаем ошибку как повторяемую.
+            retryable = status == 400
+            hint = ("Похоже на переполнение контекста: промпт + max_tokens больше "
+                    "--max-model-len. " if retryable else
+                    "Сверьте имя модели с /v1/models (--served-model-name). ")
             raise LLMError(
                 f"vLLM вернул ошибку для модели '{model_name}' ({endpoint}): {e}. "
-                f"Ответ: {body[:300]}. Сверьте имя модели с /v1/models "
-                "(--served-model-name)."
+                f"Ответ: {body[:300]}. {hint}",
+                retryable=retryable,
             ) from e
 
     raise LLMError(f"Модель '{model_name}' (vLLM) не ответила за отведённое время "
-                   f"после {max_timeout_retries + 1} попыток") from last_exc
+                   f"после {max_timeout_retries + 1} попыток",
+                   retryable=True) from last_exc
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -361,11 +519,30 @@ def extract_json(raw: str) -> dict:
 
     json_str = text[start:end]
 
-    for candidate in (json_str, repair_json(json_str)):
+    # Незакрытые скобки — прямой признак того, что модель оборвала ответ.
+    # repair_json дописывает их в конец, и такой JSON начинает парситься как
+    # валидный, МОЛЧА потеряв недописанные поля. Раньше это не фиксировалось
+    # нигде: по отчёту нельзя было отличить «судья так решил» от «мы не дочитали
+    # ответ судьи». Считаем оба случая отдельно.
+    unbalanced = json_str.count("{") > json_str.count("}")
+
+    for repaired_pass, candidate in enumerate((json_str, repair_json(json_str))):
         try:
-            return json.loads(candidate)
+            parsed = json.loads(candidate)
         except json.JSONDecodeError:
             continue
+        if repaired_pass:
+            st = _stats()
+            if st is not None:
+                st.repaired += 1
+                if unbalanced:
+                    st.truncation_repaired += 1
+                    st.note("ответ был оборван: JSON достроен дописыванием скобок, "
+                            "недописанные поля потеряны")
+            if unbalanced:
+                log.warning("      JSON достроен после обрыва (дописаны скобки) — "
+                            "часть полей ответа потеряна")
+        return parsed
 
     # Последний шанс: первый сбалансированный объект (модель иногда пишет 2 JSON подряд)
     depth, best_end = 0, -1
@@ -390,6 +567,11 @@ def extract_json(raw: str) -> dict:
         if salvaged:
             log.warning("      JSON собран салважем верхнеуровневых полей "
                         "(ответ был оборван); ключей извлечено: %d", len(salvaged))
+            st = _stats()
+            if st is not None:
+                st.salvaged += 1
+                st.salvaged_keys += len(salvaged)
+                st.note(f"салваж: восстановлено {len(salvaged)} верхнеуровневых полей")
             return salvaged
 
     raise ValueError(f"JSON не удалось распарсить даже после ремонта. "
@@ -415,6 +597,7 @@ def ask_json(
     think: Optional[bool] = None,
     temperature: float = config.DEFAULT_TEMPERATURE,
     num_predict: int = config.DEFAULT_NUM_PREDICT,
+    num_ctx: int = config.NUM_CTX,
 ) -> dict:
     """
     Запрашивает у модели структурированный JSON-ответ с автоматическим
@@ -443,25 +626,39 @@ def ask_json(
     """
     log.info("      %s %s | %d симв.", model_name, desc, len(prompt))
     last_raw = ""
+    st = _stats()
+    budget = num_predict
+    was_truncated = False       # предыдущая попытка оборвалась по лимиту длины
 
     for attempt in range(1, max_attempts + 1):
         force_json = True
         current_prompt = prompt
+        if st is not None:
+            st.attempts += 1
 
-        if attempt == 2:
+        if attempt == 2 and not was_truncated:
+            # Снятие format=json помогает, когда модель «залипла» в JSON-грамматике.
+            # При ОБРЫВЕ это не при чём — там виноват бюджет, и режим JSON нужно
+            # сохранить, иначе к обрыву добавится ещё и свободный текст.
             log.warning("      %s retry %d (без format=json)…", model_name, attempt)
             force_json = False
         elif attempt >= 3:
             alt = fallback_prompt_fn(attempt, last_raw) if fallback_prompt_fn else None
             if alt is not None:
-                log.warning("      %s retry %d (альтернативный промпт)…", model_name, attempt)
+                log.warning("      %s retry %d (упрощённый промпт, без заземления)…",
+                            model_name, attempt)
                 current_prompt = alt
+                if st is not None:
+                    st.fallback_used += 1
+                    st.note(f"попытка {attempt}: упрощённый промпт без заземления ({desc})")
 
         try:
             raw = generate(model_name, current_prompt,
                            force_json=force_json, think=think,
-                           temperature=temperature, num_predict=num_predict)
+                           temperature=temperature, num_predict=budget,
+                           num_ctx=num_ctx)
             last_raw = raw
+            was_truncated = False
             log.debug("      RAW попытка %d: %.300s", attempt, raw)
 
             parsed = extract_json(raw)
@@ -473,13 +670,46 @@ def ask_json(
                 log.info("      %s ✅ получен на попытке %d", model_name, attempt)
             return parsed
 
+        except TruncatedResponse as e:
+            # Повторять тот же запрос с тем же бюджетом бессмысленно — он оборвётся
+            # ровно так же. Удваиваем бюджет (до потолка) и пробуем снова.
+            last_raw = e.partial
+            was_truncated = True
+            new_budget = min(budget * 2, config.MAX_TOKENS_CEILING)
+            if new_budget > budget:
+                log.warning("      %s попытка %d: ответ оборван (лимит %d) — "
+                            "поднимаю бюджет до %d", model_name, attempt, budget, new_budget)
+                if st is not None:
+                    st.budget_raised += 1
+                budget = new_budget
+            else:
+                log.warning("      %s попытка %d: ответ оборван на потолке бюджета %d",
+                            model_name, attempt, budget)
+            if attempt < max_attempts:
+                time.sleep(3)
+
         except (json.JSONDecodeError, ValueError) as e:
+            if st is not None:
+                st.json_failures += 1
             log.warning("      %s попытка %d: %.120s", model_name, attempt, str(e))
             if attempt < max_attempts:
                 time.sleep(3)
 
+        except LLMError as e:
+            # Недоступный сервер / неверное имя модели — повторять нечего,
+            # ошибка должна всплыть сразу. Таймаут и HTTP 400 (переполнение
+            # контекста) — повторяем: следующая попытка может уйти на укороченный
+            # fallback-промпт, который влезет.
+            if not getattr(e, "retryable", False):
+                raise
+            log.warning("      %s попытка %d: %.140s", model_name, attempt, str(e))
+            if attempt >= max_attempts:
+                raise
+            time.sleep(3)
+
+    tail = " (ответ обрывался по лимиту длины)" if was_truncated else ""
     raise LLMError(f"Модель '{model_name}' не вернула пригодный JSON "
-                   f"после {max_attempts} попыток ({desc})")
+                   f"после {max_attempts} попыток ({desc}){tail}", retryable=False)
 
 
 # ══════════════════════════════════════════════════════════════════
