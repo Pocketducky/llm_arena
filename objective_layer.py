@@ -38,12 +38,15 @@ objective_layer.py — объективный слой: извлечение п�
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Optional
 
 import config
+
+log = logging.getLogger("objective_layer")
 
 # ══════════════════════════════════════════════════════════════════
 # 1. ЧИСЛОВЫЕ ФАКТЫ С ЕДИНИЦАМИ ИЗМЕРЕНИЯ
@@ -314,20 +317,51 @@ def clear_entity_cache() -> None:
     _ENTITY_CACHE.clear()
 
 
-def extract_semantic_entities(panel, text: str, role: str = "judge_1",
-                              desc: str = "извлечение сущностей") -> dict[str, list[str]]:
-    """
-    LLM-извлечение сущностей через абстрактную роль из JudgePanel (Блок 0).
-    panel=None — функция не вызывается (обёртки выше должны проверять сами).
+def _split_for_extraction(text: str) -> list[str]:
+    """Режет длинный текст на перекрывающиеся куски по границам предложений.
 
-    Намеренно тонкий слой над `panel.ask_json`: вся специфика — в промпте
-    и схеме, retry/JSON-восстановление остаются в llm_client. Результат
-    кэшируется по (роль, текст) на время процесса (см. _ENTITY_CACHE).
+    Перекрытие нужно, чтобы сущность, попавшая на стык, не потерялась. Куски
+    ограничены config.ENTITY_CHUNK_CHARS, весь текст — config.ENTITY_MAX_CHARS.
     """
-    cache_key = (role, text[:6000])
-    cached = _ENTITY_CACHE.get(cache_key)
-    if cached is not None:
-        return {cat: list(v) for cat, v in cached.items()}
+    text = text[:config.ENTITY_MAX_CHARS]
+    limit = max(1000, config.ENTITY_CHUNK_CHARS)
+    if len(text) <= limit:
+        return [text]
+
+    overlap = max(0, min(config.ENTITY_CHUNK_OVERLAP, limit // 4))
+    chunks: list[str] = []
+    pos = 0
+    while pos < len(text):
+        end = min(pos + limit, len(text))
+        if end < len(text):
+            # По возможности рвём по концу предложения, а не посреди слова.
+            window = text.rfind(". ", pos + limit // 2, end)
+            if window != -1:
+                end = window + 1
+        chunks.append(text[pos:end])
+        if end >= len(text):
+            break
+        pos = max(pos + 1, end - overlap)
+    return chunks
+
+
+def _merge_entity_lists(parts: list[dict[str, list[str]]]) -> dict[str, list[str]]:
+    """Объединяет списки сущностей из кусков, снимая дубликаты по нормализованной
+    форме (куски перекрываются, поэтому повторы ожидаемы)."""
+    out: dict[str, list[str]] = {cat: [] for cat in ENTITY_CATEGORIES}
+    seen: dict[str, set[str]] = {cat: set() for cat in ENTITY_CATEGORIES}
+    for part in parts:
+        for cat in ENTITY_CATEGORIES:
+            for item in part.get(cat, []):
+                key = _normalize_entity(item)
+                if key and key not in seen[cat]:
+                    seen[cat].add(key)
+                    out[cat].append(item)
+    return out
+
+
+def _extract_entities_one(panel, text: str, role: str, desc: str) -> dict[str, list[str]]:
+    """Один LLM-вызов извлечения по одному куску текста."""
 
     def _validate(parsed: dict, _raw: str) -> None:
         if not any(parsed.get(cat) for cat in ENTITY_CATEGORIES):
@@ -338,7 +372,7 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
 
     result = panel.ask_json(
         role,
-        _ENTITY_EXTRACTION_PROMPT.format(text=text[:6000]),
+        _ENTITY_EXTRACTION_PROMPT.format(text=text),
         desc=desc, validate_fn=_validate, max_attempts=3,
         num_predict=config.TOKENS_ENTITIES,
         # think=False — критично для «мыслящих» моделей семейства qwen3:
@@ -347,13 +381,44 @@ def extract_semantic_entities(panel, text: str, role: str = "judge_1",
         # рассуждения <think>...</think> съедают весь бюджет num_predict ДО
         # самого JSON-ответа — итог обрывается без закрывающей скобки или
         # оказывается пустым (см. подробности в llm_client.generate).
-        # Здесь — чисто экстрактивная задача без нужды в рассуждениях:
-        # явное отключение чинит обрыв И ускоряет вызов (тот же промпт с
-        # think=False уложился в 592 из 1024 токенов, done_reason="stop").
         think=False,
     )
-    out = {cat: [str(x).strip() for x in result.get(cat, []) if str(x).strip()]
-           for cat in ENTITY_CATEGORIES}
+    return {cat: [str(x).strip() for x in result.get(cat, []) if str(x).strip()]
+            for cat in ENTITY_CATEGORIES}
+
+
+def extract_semantic_entities(panel, text: str, role: str = "judge_1",
+                              desc: str = "извлечение сущностей") -> dict[str, list[str]]:
+    """
+    LLM-извлечение сущностей через абстрактную роль из JudgePanel (Блок 0).
+    panel=None — функция не вызывается (обёртки выше должны проверять сами).
+
+    ДЛИННЫЕ ТЕКСТЫ. Раньше здесь стояло жёсткое `text[:6000]` — и в промпте, и в
+    ключе кэша. На прод-корпусе (26 ЭМК, длина исходника 13004-32527 симв.,
+    медиана 21107) это означало, что ВСЕ 26 карт обрезались и в среднем 72 %
+    текста не доходило до извлечения вовсе. Поскольку при scope="radiologist"
+    entity_recall — единственное действующее правило шлюза, его знаменатель
+    считался по первой трети карты: систематическая, ничем не выявляемая ошибка.
+    Теперь длинный текст режется на перекрывающиеся куски и списки объединяются.
+
+    Ключ кэша — sha256 ПОЛНОГО текста: прежний ключ по префиксу в 6000 символов
+    склеил бы две разные карты с одинаковым началом (шаблонные документы).
+    """
+    chunks = _split_for_extraction(text)
+    cache_key = (role, hashlib.sha256(("\n".join(chunks)).encode("utf-8")).hexdigest())
+    cached = _ENTITY_CACHE.get(cache_key)
+    if cached is not None:
+        return {cat: list(v) for cat, v in cached.items()}
+
+    if len(chunks) == 1:
+        out = _extract_entities_one(panel, chunks[0], role, desc)
+    else:
+        log.info("      текст %d симв. -> %d перекрывающихся кусков для извлечения сущностей",
+                 len(text), len(chunks))
+        parts = [_extract_entities_one(panel, ch, role, f"{desc} [{i}/{len(chunks)}]")
+                 for i, ch in enumerate(chunks, 1)]
+        out = _merge_entity_lists(parts)
+
     _ENTITY_CACHE[cache_key] = {cat: list(v) for cat, v in out.items()}
     return out
 
@@ -942,9 +1007,37 @@ class ObjectiveComparisonReport:
     causality: Optional[dict] = None
     interpretation: Optional[dict] = None
 
-    def hard_findings(self) -> list[str]:
-        """Человекочитаемый список «жёстких» расхождений — то, что обязано
-        попасть в обоснование судьи и потенциально включить стоп-правило E1."""
+    def hard_findings(self, kind: str = "all") -> list[str]:
+        """Человекочитаемый список расхождений.
+
+        kind:
+          "real"        — только РЕАЛЬНЫЕ ошибки: искажённое число, подменённая
+                          единица измерения, инверсия полярности, введённая
+                          причинность, ложная интерпретация;
+          "compression" — непокрытые сущности источника, то есть ЗАКОННЫЕ
+                          пропуски при сжатии;
+          "all"         — оба списка (прежнее поведение, используется в отчёте).
+
+        ЗАЧЕМ РАЗДЕЛЕНИЕ. Измерено на прогоне eval_patient_zh1: у ВСЕХ 17
+        кандидатов 16 находок совпадали побайтово, и все они были вида
+        «X «сущность» не найдено в сравниваемом тексте». Специфичная для
+        кандидата находка присутствовала лишь в 3 строках из 17. То есть список
+        на 94 % состоял из константы, одинаковой и для эталона, и для
+        антонимической инверсии: сигнал/шум ≈ 1:17.
+
+        Для сводки на ~540 символов против источника на ~1857 непокрытие
+        большинства сущностей — арифметическое следствие сжатия, а не ошибка.
+        Среди «жёстких расхождений» выжимки ДЛЯ РЕНТГЕНОЛОГА оказывались
+        «миома матки», «общий анализ мочи», «дизурические явления».
+
+        eval_patient.py (свойства real_error_findings / n_compression) это уже
+        различал и исключал компрессию из ключа ранжирования; judge.py — нет, и
+        весь список уходил в промпт блока E с инструкцией «каждое ОБЯЗАТЕЛЬНО
+        разбери: опасность (->E1) или пропуск (->E2)». Судье выдавалось 17
+        готовых аргументов за E2.pass=false, одинаковых для всех кандидатов.
+        """
+        if kind not in ("all", "real", "compression"):
+            raise ValueError(f"kind должен быть all|real|compression, получено {kind!r}")
         out = []
         for mm in self.numeric["mismatches"]:
             out.append(f"число «{mm.fact_a.raw}» -> «{mm.fact_b.raw}» "
@@ -963,7 +1056,9 @@ class ObjectiveComparisonReport:
             for c in self.interpretation["contradictions"]:
                 out.append(f"ложная интерпретация: «{c['fragment']}» — оценка "
                            f"«{c['claimed']}» противоречит значению (норма: {c['true']})")
-        if self.entities:
+        if kind == "compression":
+            out = []      # реальные ошибки в этот срез не входят
+        if self.entities and kind in ("all", "compression"):
             for cat, rep in self.entities.items():
                 for missing in rep["missing_in_b"]:
                     out.append(f"{cat}: «{missing}» не найдено в сравниваемом тексте")
@@ -977,6 +1072,10 @@ class ObjectiveComparisonReport:
                 # отдельно в заземлении блока A — _ground_block_a). Иначе эталон
                 # ложно получает «галлюцинации».
         return out
+
+    def n_compression(self) -> int:
+        """Сколько сущностей источника не покрыто кандидатом (законное сжатие)."""
+        return len(self.hard_findings("compression"))
 
     def to_summary(self) -> dict:
         """
