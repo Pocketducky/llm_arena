@@ -75,6 +75,18 @@ BENIGN = "benign"
 # ЛЕГЕНДА ИСКАЖЕНИЙ — ЕДИНЫЙ РЕДАКТИРУЕМЫЙ ИСТОЧНИК ПРАВДЫ
 # ══════════════════════════════════════════════════════════════════
 
+# Ожидаемая ИТОГОВАЯ КАТЕГОРИЯ по типу искажения. В v1 такого отображения не
+# было вовсе: легенда хранила только critical/benign, а режим B схлопывал три
+# категории в бинарь `rejected = (category == "Неприемлемо")`. Из-за этого
+# критическое искажение, получившее «Требует редактирования», считалось промахом
+# наравне с «Готово» — понять, промах это или почти-попадание, было нельзя, а
+# точность по benign не мерилась вовсе (для них проверялось только отсутствие
+# отказа, а не то, признаны ли они пригодными).
+CATEGORY_READY = "Готово к клиническому применению"
+CATEGORY_EDIT = "Требует редактирования"
+CATEGORY_REJECT = "Неприемлемо"
+
+
 @dataclass(frozen=True)
 class DistortionSpec:
     """Что внедрено в строке N (одинаково для всех 10 колонок-пациентов)."""
@@ -82,10 +94,42 @@ class DistortionSpec:
     severity: str       # CRITICAL | BENIGN
     taxonomy: str       # блок таксономии дизайна (A-E) или "-"
     note: str           # пример конкретной правки (для отчёта/ревью)
+    # Ожидаемый исход. По умолчанию выводится из severity: критическое искажение
+    # обязано давать «Неприемлемо», безобидное — «Готово к клиническому
+    # применению». Переопределяется точечно там, где научная команда решила
+    # иначе (см. пограничные строки ниже).
+    expected_category: Optional[str] = None
+    # Ожидается ли срабатывание стоп-правила E1 (клиническая опасность).
+    # Не всякое критическое искажение опасно: пропуск контента — это провал
+    # полноты (блок B), а не опасное утверждение.
+    expected_e1: Optional[bool] = None
 
     @property
     def is_critical(self) -> bool:
         return self.severity == CRITICAL
+
+    @property
+    def category_expected(self) -> str:
+        if self.expected_category:
+            return self.expected_category
+        return CATEGORY_REJECT if self.is_critical else CATEGORY_READY
+
+    @property
+    def e1_expected(self) -> bool:
+        if self.expected_e1 is not None:
+            return self.expected_e1
+        # По умолчанию E1 ждём от искажений, создающих ОПАСНОЕ УТВЕРЖДЕНИЕ
+        # (инверсия смысла, отрицание, подмена сущности, искажение числа,
+        # выдуманный факт), но не от пропусков и не от benign.
+        return self.dtype in _E1_EXPECTED_TYPES
+
+
+# Типы, для которых искажение порождает клинически ОПАСНОЕ утверждение —
+# именно на них предохранитель E1 обязан срабатывать.
+_E1_EXPECTED_TYPES = frozenset({
+    "антонимическая_инверсия", "вставка_отрицания", "подмена_сущности",
+    "искажение_числа", "ложная_интерпретация", "галлюцинация",
+})
 
 
 # Строки сгруппированы по тематическим блокам нарастающей интенсивности (×1/×2/×3).
@@ -105,16 +149,25 @@ ROW_DISTORTIONS: dict[int, DistortionSpec] = {
     11: DistortionSpec("искажение_числа", CRITICAL, "A", "56→46 / 40→4 (×1)"),
     12: DistortionSpec("искажение_числа", CRITICAL, "A", "+ 150/90→250/90 / 2-го→1-го (×2)"),
     13: DistortionSpec("искажение_числа", CRITICAL, "A", "+ 40→5 / 86→56 (×3)"),
-    14: DistortionSpec("ложная_причинность", CRITICAL, "A", "«и курение»→«вследствие курения»"),
+    # Ложная причинность искажает смысл, но не создаёт прямой угрозы пациенту:
+    # ожидаем отказ по качеству, без срабатывания предохранителя E1.
+    14: DistortionSpec("ложная_причинность", CRITICAL, "A", "«и курение»→«вследствие курения»",
+                       expected_e1=False),
     15: DistortionSpec("ложная_интерпретация", CRITICAL, "A", "добавлено «повышена/снижено» к норм. значению (×1)"),
     16: DistortionSpec("ложная_интерпретация", CRITICAL, "A", "+ ещё одна выдуманная интерпретация (×2)"),
     17: DistortionSpec("ложная_интерпретация", CRITICAL, "A", "+ ещё одна выдуманная интерпретация (×3)"),
     18: DistortionSpec("галлюцинация", CRITICAL, "A", "добавлен выдуманный факт (отягощённая наследственность / кашель)"),
     19: DistortionSpec("галлюцинация", CRITICAL, "A", "добавлено выдуманное предложение-рекомендация"),
     # пропуск контента — ДЕФОЛТ critical (полнота, блок B); переразметьте при необходимости
-    21: DistortionSpec("пропуск_контента", CRITICAL, "B", "[ДЕФОЛТ critical] удалено слово/контент (×1)"),
-    22: DistortionSpec("пропуск_контента", CRITICAL, "B", "[ДЕФОЛТ critical] удалён контент (×2)"),
-    23: DistortionSpec("пропуск_контента", CRITICAL, "B", "[ДЕФОЛТ critical] удалён контент (×3)"),
+    # Пропуск контента — провал ПОЛНОТЫ (блок B), а не опасное утверждение:
+    # ждём отказ, но не E1. Ошибочно требовать здесь предохранитель — значит
+    # заставить его срабатывать на любой сжатой суммаризации.
+    21: DistortionSpec("пропуск_контента", CRITICAL, "B", "[ДЕФОЛТ critical] удалено слово/контент (×1)",
+                       expected_e1=False),
+    22: DistortionSpec("пропуск_контента", CRITICAL, "B", "[ДЕФОЛТ critical] удалён контент (×2)",
+                       expected_e1=False),
+    23: DistortionSpec("пропуск_контента", CRITICAL, "B", "[ДЕФОЛТ critical] удалён контент (×3)",
+                       expected_e1=False),
 
     # --- БЕЗОБИДНЫЕ ИСКАЖЕНИЯ (алгоритм НЕ должен флагать) ---
     20: DistortionSpec("перестановка", BENIGN, "D", "предложение переставлено местами"),
@@ -122,13 +175,18 @@ ROW_DISTORTIONS: dict[int, DistortionSpec] = {
     25: DistortionSpec("опечатка", BENIGN, "D", "опечатка (×2)"),
     26: DistortionSpec("опечатка", BENIGN, "D", "опечатка (×3)"),
     # нерелевантная вставка — ДЕФОЛТ benign (безвредный шум, блок C)
-    27: DistortionSpec("нерелевантная_вставка", BENIGN, "C", "[ДЕФОЛТ benign] вставлен посторонний текст («Сорта кофе…»)"),
+    # Посторонний текст безвреден клинически, но это дефект релевантности
+    # (блок C): «Готово к клиническому применению» ему не положено.
+    27: DistortionSpec("нерелевантная_вставка", BENIGN, "C", "[ДЕФОЛТ benign] вставлен посторонний текст («Сорта кофе…»)",
+                       expected_category=CATEGORY_EDIT),
     28: DistortionSpec("пояснение", BENIGN, "D", "расшифровка аббревиатуры: КФК (креатинфосфокиназа)"),
     # интерпретация «в норме» — ДЕФОЛТ benign (как правило корректная: 126 ед/л в норме, Hb 115 снижен)
     29: DistortionSpec("интерпретация_норма", BENIGN, "-", "[ДЕФОЛТ benign] добавлено «в норме/повышено» (×1)"),
     30: DistortionSpec("интерпретация_норма", BENIGN, "-", "[ДЕФОЛТ benign] (×2)"),
     31: DistortionSpec("интерпретация_норма", BENIGN, "-", "[ДЕФОЛТ benign] (×3)"),
-    32: DistortionSpec("дублирование", BENIGN, "D", "предложение продублировано"),
+    # Дублирование — дефект читаемости (блок D), не ошибка факта.
+    32: DistortionSpec("дублирование", BENIGN, "D", "предложение продублировано",
+                       expected_category=CATEGORY_EDIT),
     33: DistortionSpec("пунктуация", BENIGN, "D", "лишняя запятая (×1)"),
     34: DistortionSpec("пунктуация", BENIGN, "D", "вопросительный знак (×2)"),
     35: DistortionSpec("пунктуация", BENIGN, "D", "восклицательный знак (×3)"),
@@ -136,6 +194,12 @@ ROW_DISTORTIONS: dict[int, DistortionSpec] = {
     37: DistortionSpec("синоним", BENIGN, "-", "+ поступление→госпитализация (×2)"),
     38: DistortionSpec("синоним", BENIGN, "-", "+ купирован→остановлен (×3)"),
 }
+
+# Эталонная строка как контрольный случай: искажений нет, ожидается «Готово»
+# без срабатывания E1.
+GOLD_SPEC = DistortionSpec("эталон (контроль)", BENIGN, "-",
+                           "неискажённая эталонная суммаризация",
+                           expected_category=CATEGORY_READY, expected_e1=False)
 
 CRITICAL_TYPES = frozenset(s.dtype for s in ROW_DISTORTIONS.values() if s.is_critical)
 BENIGN_TYPES = frozenset(s.dtype for s in ROW_DISTORTIONS.values() if not s.is_critical)
@@ -166,10 +230,49 @@ def _find_xlsx() -> str:
     return candidates[0]
 
 
+def _assert_row_labels(df, path) -> None:
+    """Строгая проверка соответствия «номер строки xlsx <-> легенда».
+
+    Весь ground truth привязан к НОМЕРУ СТРОКИ: ROW_DISTORTIONS[N] сопоставляется
+    с df.iloc[N]. В самом файле никаких типов и критичности нет — только целые
+    1..38 в колонке меток. Значит вставка или удаление одной строки молча
+    сдвигает разметку ВСЕГО набора, и прогон продолжит считать метрики по
+    неверным меткам. Единственный существовавший guard
+    (check_legend_consistency) намеренно не фатален и сверяет лишь грубый класс
+    диффа, поэтому сдвиг внутри одного класса он не заметит.
+
+    Здесь падаем сразу и с объяснением: лучше остановить прогон, чем выпустить
+    отчёт с перепутанными типами искажений.
+    """
+    labels = df[ROW_LABEL_COL]
+    problems = []
+    for n in range(GOLD_ROW, LAST_DISTORTION_ROW + 1):
+        if n >= len(labels):
+            problems.append(f"строка {n} отсутствует в файле")
+            break
+        raw = labels.iloc[n]
+        try:
+            got = int(float(raw))
+        except (TypeError, ValueError):
+            problems.append(f"iloc[{n}]: метка {raw!r} не число (ожидалось {n})")
+            continue
+        if got != n:
+            problems.append(f"iloc[{n}]: метка {got} (ожидалось {n})")
+    if problems:
+        raise SystemExit(
+            f"Разметка набора {path} не совпадает с легендой ROW_DISTORTIONS:\n  "
+            + "\n  ".join(problems[:10])
+            + "\n\nВесь ground truth привязан к номеру строки. Похоже, в файл "
+              "добавили или удалили строку — метрики по нему считать нельзя. "
+              "Либо восстановите порядок строк, либо перенумеруйте ROW_DISTORTIONS."
+        )
+
+
 def load_dataset(xlsx_path: Optional[str] = None, *, sheet: str = SHEET_NAME) -> list[CaseColumn]:
     """Парсит матрицу набора в список CaseColumn (по одному на пациента)."""
     path = xlsx_path or _find_xlsx()
     df = pd.read_excel(path, sheet_name=sheet)
+    _assert_row_labels(df, path)
     case_columns = [c for c in df.columns if c != ROW_LABEL_COL]
 
     cases: list[CaseColumn] = []
@@ -204,17 +307,35 @@ class EvalPair:
     candidate: str
 
 
-def build_pairs(cases: list[CaseColumn], *, reference: str = "gold") -> list[EvalPair]:
+def build_pairs(cases: list[CaseColumn], *, reference: str = "gold",
+                with_gold_control: bool = False) -> list[EvalPair]:
     """
     Строит пары для оценки. reference="gold" — эталонная суммаризация (стр.1):
     используется И режимом A (детекция), И режимом B (прод-прогон), т.к.
     искажения внедрены относительно эталона. reference="source" (исходник стр.0)
     оставлен для будущих наборов без эталона. Только строки с известной легендой.
+
+    with_gold_control добавляет контрольную пару «эталон против самого себя».
+    Это нижняя граница здравомыслия системы: если НЕИСКАЖЁННЫЙ текст не признан
+    пригодным, все остальные цифры бессмысленны. На пилоте эталон получал
+    «Требует редактирования» (полный пайплайн) и «Неприемлемо» с E1 (режим
+    только-судьи), и заметить это было негде — строка 1 в пары режима B
+    вообще не входила.
+
+    ВКЛЮЧАТЬ ТОЛЬКО ДЛЯ РЕЖИМА B. В режиме A (детекция искажений) сравнение
+    эталона с самим собой — вырожденная пара: она по построению никогда не даст
+    флаг и просто раздует знаменатель benign, бесплатно улучшив FPR. Метрику
+    детекции это портит, а смысла не добавляет: проверять «не нашёл ли diff
+    различий между идентичными текстами» нечего.
     """
     assert reference in ("gold", "source")
     pairs: list[EvalPair] = []
     for case in cases:
         ref = case.gold if reference == "gold" else case.source
+        if with_gold_control and reference == "gold":
+            pairs.append(EvalPair(
+                pair_id=f"{case.column}#row{GOLD_ROW}", column=case.column, row=GOLD_ROW,
+                spec=GOLD_SPEC, reference=ref, candidate=case.gold))
         for n, text in case.candidates.items():
             spec = ROW_DISTORTIONS.get(n)
             if spec is None:
@@ -441,6 +562,20 @@ class ProductionResult:
     category: str
     gate_status: str
     rejected: bool
+    e1: bool = False
+    decision_path: list = field(default_factory=list)
+
+    @property
+    def expected_category(self) -> str:
+        return self.pair.spec.category_expected
+
+    @property
+    def category_correct(self) -> bool:
+        return self.category == self.expected_category
+
+    @property
+    def e1_correct(self) -> bool:
+        return self.e1 == self.pair.spec.e1_expected
 
 
 def run_production(pairs: list[EvalPair], *, panel: JudgePanel,
@@ -466,8 +601,10 @@ def run_production(pairs: list[EvalPair], *, panel: JudgePanel,
         # засчитывать их как reject значило бы мерить надёжность инфраструктуры
         # вместо качества суммаризации.
         rejected = category == aggregator.CATEGORY_REJECT
-        results.append(ProductionResult(pair=p, category=category,
-                                        gate_status=gate_status, rejected=rejected))
+        results.append(ProductionResult(
+            pair=p, category=category, gate_status=gate_status, rejected=rejected,
+            e1=bool(ev.get("e1_triggered")),
+            decision_path=list(ev.get("decision_path") or [])))
     log.info("synthetic[B]: прод-прогон завершён — %d пар", len(results))
     return results
 
@@ -539,6 +676,19 @@ class ProductionSummary:
     by_type: dict[str, TypeStats]
     overall_critical_reject: Optional[float]
     overall_benign_reject: Optional[float]
+    # Матрица ошибок 3x3 и метрики по категориям. В v1 их не было: три категории
+    # схлопывались в бинарь `rejected`, поэтому критическое искажение, получившее
+    # «Требует редактирования», считалось промахом наравне с «Готово», а точность
+    # по benign не измерялась вовсе.
+    confusion: dict = field(default_factory=dict)       # {ожидаемая: {полученная: n}}
+    per_category: dict = field(default_factory=dict)    # {категория: {precision, recall, f1, support}}
+    accuracy: Optional[float] = None
+    e1_accuracy: Optional[float] = None
+    e1_confusion: dict = field(default_factory=dict)    # TP/FP/FN/TN по стоп-правилу
+    service_statuses: dict = field(default_factory=dict)  # «ошибка»/«Оценка неполна»
+
+
+_CATEGORY_ORDER = (CATEGORY_READY, CATEGORY_EDIT, CATEGORY_REJECT)
 
 
 def summarize_production(results: list[ProductionResult]) -> ProductionSummary:
@@ -554,10 +704,51 @@ def summarize_production(results: list[ProductionResult]) -> ProductionSummary:
         )
     crit = [r for r in results if r.pair.spec.is_critical]
     ben = [r for r in results if not r.pair.spec.is_critical]
+
+    # Матрица ошибок: ожидаемая категория x полученная. Служебные статусы
+    # («ошибка», «Оценка неполна») выносим отдельно — это отсутствие результата,
+    # а не ошибочная классификация, и смешивать их с промахами нельзя.
+    service = {}
+    confusion: dict = {exp: {got: 0 for got in _CATEGORY_ORDER} for exp in _CATEGORY_ORDER}
+    scored = []
+    for r in results:
+        if r.category not in _CATEGORY_ORDER:
+            service[r.category] = service.get(r.category, 0) + 1
+            continue
+        scored.append(r)
+        confusion[r.expected_category][r.category] += 1
+
+    per_category = {}
+    for cat in _CATEGORY_ORDER:
+        tp = confusion[cat][cat]
+        fp = sum(confusion[e][cat] for e in _CATEGORY_ORDER if e != cat)
+        fn = sum(confusion[cat][g] for g in _CATEGORY_ORDER if g != cat)
+        support = tp + fn
+        precision = round(tp / (tp + fp), 4) if (tp + fp) else None
+        recall = round(tp / support, 4) if support else None
+        f1 = (round(2 * precision * recall / (precision + recall), 4)
+              if precision and recall else (0.0 if support else None))
+        per_category[cat] = {"precision": precision, "recall": recall,
+                             "f1": f1, "support": support}
+
+    accuracy = (round(sum(1 for r in scored if r.category_correct) / len(scored), 4)
+                if scored else None)
+
+    # Стоп-правило E1 меряем отдельно: это предохранитель безопасности, и его
+    # ошибки первого и второго рода имеют разную цену.
+    e1_tp = sum(1 for r in scored if r.e1 and r.pair.spec.e1_expected)
+    e1_fp = sum(1 for r in scored if r.e1 and not r.pair.spec.e1_expected)
+    e1_fn = sum(1 for r in scored if not r.e1 and r.pair.spec.e1_expected)
+    e1_tn = sum(1 for r in scored if not r.e1 and not r.pair.spec.e1_expected)
+
     return ProductionSummary(
         total=len(results), by_type=by_type,
         overall_critical_reject=(round(sum(1 for r in crit if r.rejected) / len(crit), 4) if crit else None),
         overall_benign_reject=(round(sum(1 for r in ben if r.rejected) / len(ben), 4) if ben else None),
+        confusion=confusion, per_category=per_category, accuracy=accuracy,
+        e1_accuracy=(round((e1_tp + e1_tn) / len(scored), 4) if scored else None),
+        e1_confusion={"TP": e1_tp, "FP": e1_fp, "FN": e1_fn, "TN": e1_tn},
+        service_statuses=service,
     )
 
 
@@ -607,38 +798,70 @@ def render_detection(summary: DetectionSummary, *, llm_used: bool) -> str:
 
 def render_production(summary: ProductionSummary) -> str:
     lines = [
-        "=" * 72,
+        "=" * 78,
         "РЕЖИМ B — СКВОЗНОЙ ПРОД-ПРОГОН (эталон стр.1 -> строка N, judge.evaluate_summary)",
         f"Всего пар: {summary.total}",
-        "=" * 72,
-        "",
-        "--- КРИТИЧЕСКИЕ типы (цель: высокая доля REJECT) ---",
+        "=" * 78,
     ]
-    crit = [s for s in summary.by_type.values() if s.is_critical]
-    ben = [s for s in summary.by_type.values() if not s.is_critical]
-    for s in sorted(crit, key=lambda x: -x.n):
-        lines.append(f"  {s.dtype:<24}[{s.taxonomy}] n={s.n:<3} reject={s.rate:>6.1%} ({s.flagged}/{s.n})")
+
+    if summary.service_statuses:
+        lines += ["", "--- ПАРЫ БЕЗ РЕЗУЛЬТАТА (не участвуют в метриках) ---"]
+        for status, n in sorted(summary.service_statuses.items()):
+            lines.append(f"  {status:<24} {n}")
+        lines.append("  (это сбои прогона, а не ошибки классификации — их надо перепрогнать)")
+
+    # ── Матрица ошибок ────────────────────────────────────────────
+    lines += ["", "--- МАТРИЦА ОШИБОК (строки — ожидаемая категория, столбцы — полученная) ---"]
+    short = {CATEGORY_READY: "Готово", CATEGORY_EDIT: "Треб.ред.", CATEGORY_REJECT: "Неприемл."}
+    header = " " * 26 + "".join(f"{short[c]:>12}" for c in _CATEGORY_ORDER) + f"{'всего':>9}"
+    lines.append(header)
+    for exp in _CATEGORY_ORDER:
+        rowvals = [summary.confusion.get(exp, {}).get(got, 0) for got in _CATEGORY_ORDER]
+        mark = " <- ожидалось"
+        lines.append(f"  {short[exp]:<24}" + "".join(f"{v:>12}" for v in rowvals)
+                     + f"{sum(rowvals):>9}" + (mark if sum(rowvals) else ""))
+    if summary.accuracy is not None:
+        lines.append(f"  >>> ТОЧНОСТЬ (доля совпавших категорий): {summary.accuracy:.1%}")
+
+    # ── Метрики по категориям ─────────────────────────────────────
+    lines += ["", "--- PRECISION / RECALL / F1 ПО КАТЕГОРИЯМ ---",
+              f"  {'категория':<34}{'precision':>11}{'recall':>9}{'F1':>8}{'support':>9}"]
+    for cat in _CATEGORY_ORDER:
+        m = summary.per_category.get(cat) or {}
+        fmt = lambda v: f"{v:.2f}" if isinstance(v, (int, float)) else "—"
+        lines.append(f"  {cat:<34}{fmt(m.get('precision')):>11}{fmt(m.get('recall')):>9}"
+                     f"{fmt(m.get('f1')):>8}{m.get('support', 0):>9}")
+
+    # ── Стоп-правило E1 ───────────────────────────────────────────
+    e1 = summary.e1_confusion or {}
+    lines += ["", "--- СТОП-ПРАВИЛО E1 (предохранитель безопасности) ---",
+              f"  сработал верно (TP):        {e1.get('TP', 0)}",
+              f"  ложное срабатывание (FP):   {e1.get('FP', 0)}   <- цена: отвергнутая годная сводка",
+              f"  пропуск опасности (FN):     {e1.get('FN', 0)}   <- цена: пропущенная угроза пациенту",
+              f"  верно молчал (TN):          {e1.get('TN', 0)}"]
+    if summary.e1_accuracy is not None:
+        lines.append(f"  >>> ТОЧНОСТЬ E1: {summary.e1_accuracy:.1%}")
+    total_e1 = sum(e1.values()) or 1
+    if (e1.get("TP", 0) + e1.get("FP", 0)) == total_e1:
+        lines.append("  ⚠ E1 сработал на ВСЕХ парах — предохранитель, срабатывающий всегда, "
+                     "не несёт информации (ровно этот дефект дал 38/38 на пилоте)")
+
+    # ── Разбивка по типам (как раньше) ────────────────────────────
+    crit = [st for st in summary.by_type.values() if st.is_critical]
+    ben = [st for st in summary.by_type.values() if not st.is_critical]
+    lines += ["", "--- КРИТИЧЕСКИЕ типы (цель: высокая доля REJECT) ---"]
+    for st in sorted(crit, key=lambda x: -x.n):
+        lines.append(f"  {st.dtype:<24}[{st.taxonomy}] n={st.n:<3} reject={st.rate:>6.1%} ({st.flagged}/{st.n})")
     if summary.overall_critical_reject is not None:
         lines.append(f"  >>> ИТОГО reject по критическим: {summary.overall_critical_reject:.1%}")
-    lines += ["", "--- БЕЗОБИДНЫЕ типы (цель: низкая доля REJECT) ---"]
-    for s in sorted(ben, key=lambda x: -x.n):
-        lines.append(f"  {s.dtype:<24}[{s.taxonomy}] n={s.n:<3} reject={s.rate:>6.1%} ({s.flagged}/{s.n})")
+    lines += ["", "--- БЕЗОБИДНЫЕ типы (цель: НИЗКАЯ доля REJECT) ---"]
+    for st in sorted(ben, key=lambda x: -x.n):
+        lines.append(f"  {st.dtype:<24}[{st.taxonomy}] n={st.n:<3} reject={st.rate:>6.1%} ({st.flagged}/{st.n})")
     if summary.overall_benign_reject is not None:
         lines.append(f"  >>> ИТОГО reject по безобидным: {summary.overall_benign_reject:.1%}")
-    lines += ["", "Примечание: режим B сверяет искажённую строку с ЭТАЛОННОЙ суммаризацией "
-              "(сопоставимый объём), прогоняя её через полный конвейер судей с E1-стоп-правилом. "
-              "Это тест дискриминирующей способности всего стека (gate+3 судьи+агрегатор), "
-              "а не объективного слоя отдельно (последний — режим A)."]
+    lines.append("=" * 78)
     return "\n".join(lines)
 
-
-# ══════════════════════════════════════════════════════════════════
-# REFERENCE-МЕТРИКИ (ROUGE-L, BERTScore) — ТОЛЬКО ПРИ НАЛИЧИИ ЭТАЛОНА
-# ══════════════════════════════════════════════════════════════════
-# Считаются между ЭТАЛОНОМ (pair.reference, строка 1) и кандидатом (pair.candidate).
-# Это reference-based метрики из дизайна (Раздел 4.2): ROUGE-L — лексическое
-# перекрытие с эталоном, BERTScore — семантическое сходство с эталоном. В
-# продуктивном пути (исходник->суммаризация) эталона нет — там не применяются.
 
 def compute_reference_metrics(pairs: list[EvalPair], *, use_bertscore: bool) -> dict[str, dict]:
     """Возвращает {pair_id: {"rouge_l": F1, "bertscore": F1|None}} по парам
@@ -839,7 +1062,7 @@ def run(*, mode: str = "a", limit_cols: Optional[int] = None,
         # отсюда прежний вырожденный 100% reject. Эталон-референс делает сверку
         # сопоставимой по объёму: benign-кандидат ≈ эталон проходит шлюз и судей,
         # critical расходится и отклоняется. См. docstring модуля, режим B.
-        pairs_b = build_pairs(cases, reference="gold")
+        pairs_b = build_pairs(cases, reference="gold", with_gold_control=True)
         prod_results = run_production(pairs_b, panel=panel, scope=scope)
         prod_summary = summarize_production(prod_results)
         print("\n" + render_production(prod_summary))
@@ -930,7 +1153,28 @@ def _self_check() -> None:
 
     pairs_a = build_pairs(cases, reference="gold")
     print(f"\n--- режим A: {len(pairs_a)} пар (эталон->кандидат) ---")
-    assert len(pairs_a) == sum(len(c.candidates) for c in cases)
+    assert len(pairs_a) == sum(len(c.candidates) for c in cases), (
+        "режим A не должен содержать контрольных пар «эталон vs эталон»: они по "
+        "построению никогда не флагаются и бесплатно раздувают benign-знаменатель")
+
+    # ── Контрольная пара режима B: эталон против самого себя ──────
+    pairs_b = build_pairs(cases, reference="gold", with_gold_control=True)
+    gold_pairs = [p for p in pairs_b if p.row == GOLD_ROW]
+    assert len(gold_pairs) == len(cases), "контрольная пара должна быть у каждого пациента"
+    assert all(p.reference == p.candidate for p in gold_pairs), "контроль обязан сравнивать эталон с собой"
+    assert gold_pairs[0].spec.category_expected == CATEGORY_READY
+    assert gold_pairs[0].spec.e1_expected is False
+    print(f"--- режим B: {len(pairs_b)} пар, из них {len(gold_pairs)} контрольных "
+          f"(эталон vs эталон; ожидается «{CATEGORY_READY}» без E1) ---")
+
+    # ── Полнота ожиданий ground truth ─────────────────────────────
+    for row, spec in sorted(ROW_DISTORTIONS.items()):
+        assert spec.category_expected in (CATEGORY_READY, CATEGORY_EDIT, CATEGORY_REJECT), \
+            f"строка {row}: неизвестная ожидаемая категория {spec.category_expected!r}"
+        assert isinstance(spec.e1_expected, bool), f"строка {row}: ожидание E1 не задано"
+    n_e1 = sum(1 for sp in ROW_DISTORTIONS.values() if sp.e1_expected)
+    print(f"--- ground truth: {len(ROW_DISTORTIONS)} строк, "
+          f"E1 ожидается в {n_e1}, не ожидается в {len(ROW_DISTORTIONS) - n_e1} ---")
 
     # 4. Быстрый rule-based прогон детекции (без LLM) — дымовой тест.
     det = summarize_detection(run_detection(pairs_a, panel=None))
